@@ -202,6 +202,41 @@ function canvasToImage(canvas) {
   return tmp.toDataURL("image/png", 1.0);
 }
 
+function addImageContained(doc, dataUrl, x, y, boxW, boxH) {
+  if (!dataUrl) return;
+
+  // bordo contenitore (aiuta la leggibilità)
+  doc.setDrawColor(225);
+  doc.rect(x, y, boxW, boxH);
+
+  let drawX = x;
+  let drawY = y;
+  let drawW = boxW;
+  let drawH = boxH;
+
+  try {
+    const props = doc.getImageProperties(dataUrl);
+    const imgW = Number(props?.width || 1);
+    const imgH = Number(props?.height || 1);
+    const imgRatio = imgW / imgH;
+    const boxRatio = boxW / boxH;
+
+    if (imgRatio > boxRatio) {
+      drawW = boxW;
+      drawH = boxW / imgRatio;
+      drawY = y + (boxH - drawH) / 2;
+    } else {
+      drawH = boxH;
+      drawW = boxH * imgRatio;
+      drawX = x + (boxW - drawW) / 2;
+    }
+  } catch {
+    // fallback: disegna a pieno box
+  }
+
+  doc.addImage(dataUrl, "PNG", drawX, drawY, drawW, drawH);
+}
+
 function drawHeader(doc, settings, pageWidth, margin) {
   const hasLogo = !!settings.header_logo_data_url;
   const line1 = String(settings.header_line1 || "").trim();
@@ -264,7 +299,9 @@ function drawHeader(doc, settings, pageWidth, margin) {
 }
 
 function ensureSpace(doc, y, needed, settings, pageWidth, pageHeight, margin) {
-  if (y + needed <= pageHeight - margin) return y;
+  // Manteniamo una zona di sicurezza in basso per evitare sovrapposizioni con il footer
+  const safeBottom = pageHeight - 20;
+  if (y + needed <= safeBottom) return y;
   doc.addPage();
   return drawHeader(doc, settings, pageWidth, margin);
 }
@@ -595,27 +632,58 @@ function generatePdf() {
   const sourceName = state.refs?.metadata?.source_name || state.refs?.metadata?.dataset_name || "";
   const sourceVersion = state.refs?.metadata?.dataset_version || state.refs?.metadata?.version || "";
   if (sourceName || sourceVersion) {
-    y = ensureSpace(doc, y, 8, settings, pageWidth, pageHeight, margin);
     doc.setFont("helvetica", "italic");
     doc.setFontSize(8.5);
     doc.setTextColor(90);
     const txt = `Valori di riferimento: ${[sourceName, sourceVersion].filter(Boolean).join(" • ")}`;
-    doc.text(txt, margin, y + 4);
+    const wrapped = doc.splitTextToSize(txt, pageWidth - margin * 2);
+    const blockH = wrapped.length * 4.2 + 2;
+    y = ensureSpace(doc, y, blockH + 1, settings, pageWidth, pageHeight, margin);
+    doc.text(wrapped, margin, y + 4);
     doc.setTextColor(0, 0, 0);
-    y += 7;
+    y += blockH;
   }
 
   const charts = chartImagesForReport(payload, settings);
   if (charts.length) {
+    // Spazio extra per separare chiaramente testo/interpretazione e area grafici
+    y += 3;
     y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth, settings, pageHeight);
-    for (const c of charts) {
-      y = ensureSpace(doc, y, 74, settings, pageWidth, pageHeight, margin);
+
+    // Caso richiesto: due grafici affiancati in forma quadrata
+    if (charts.length === 2) {
+      const gap = 5;
+      const boxW = (pageWidth - margin * 2 - gap) / 2;
+      const boxH = boxW; // quadrato
+      const needed = boxH + 12;
+      y = ensureSpace(doc, y, needed, settings, pageWidth, pageHeight, margin);
+
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(9.5);
-      doc.text(c.title, margin, y + 3);
-      y += 4;
-      doc.addImage(c.image, "PNG", margin, y, pageWidth - margin * 2, 62);
-      y += 65;
+      doc.setFontSize(9.2);
+      doc.text(charts[0].title, margin, y + 3);
+      doc.text(charts[1].title, margin + boxW + gap, y + 3);
+
+      const yImg = y + 5;
+      addImageContained(doc, charts[0].image, margin, yImg, boxW, boxH);
+      addImageContained(doc, charts[1].image, margin + boxW + gap, yImg, boxW, boxH);
+
+      y = yImg + boxH + 4;
+    } else {
+      // Un solo grafico: resa quadrata e centrata per evitare distorsioni
+      for (const c of charts) {
+        const side = Math.min(pageWidth - margin * 2, 120);
+        const x = (pageWidth - side) / 2;
+        const needed = side + 12;
+
+        y = ensureSpace(doc, y, needed, settings, pageWidth, pageHeight, margin);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.text(c.title, margin, y + 3);
+
+        const yImg = y + 5;
+        addImageContained(doc, c.image, x, yImg, side, side);
+        y = yImg + side + 4;
+      }
     }
   }
 
