@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: curvelab-api
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        value: sqlite:///./curve_lab.db
+      - key: CORS_ORIGINS
+        value: "*"

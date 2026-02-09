@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CurveLab WebApp</title>
+  <link rel="stylesheet" href="./assets/css/main.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>CurveLab WebApp</h1>
+    <p>Refertazione curve glicemiche/insulinemiche con archivio pazienti e referto PDF</p>
+    <p id="runtimeMode" class="muted"></p>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <h2>1) Pazienti</h2>
+      <div class="row">
+        <input id="searchPatient" placeholder="Cerca per cognome, nome o CF" />
+        <button id="btnSearchPatient">Cerca</button>
+      </div>
+      <div id="patientsList" class="list"></div>
+
+      <h3>Nuovo / Modifica Paziente</h3>
+      <form id="patientForm" class="form-grid">
+        <input type="hidden" id="patientId" />
+        <input id="surname" placeholder="Cognome *" required />
+        <input id="name" placeholder="Nome *" required />
+        <input id="birth_date" type="date" />
+        <select id="sex">
+          <option value="M">Maschio</option>
+          <option value="F">Femmina</option>
+        </select>
+        <input id="fiscal_code" placeholder="Codice fiscale" />
+        <input id="phone" placeholder="Telefono" />
+        <input id="email" placeholder="Email" />
+        <textarea id="patient_notes" placeholder="Note paziente"></textarea>
+        <div class="row span-2">
+          <button type="submit">Salva paziente</button>
+          <button type="button" id="btnResetPatient">Reset</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>2) Esame</h2>
+      <p id="selectedPatientLabel" class="muted">Seleziona prima un paziente</p>
+
+      <div class="form-grid">
+        <label>Data esame <input id="exam_date" type="date" /></label>
+        <label>N° accettazione <input id="acceptance_number" /></label>
+        <label>Medico richiedente <input id="requester_doctor" /></label>
+        <label>Modalità
+          <select id="curve_mode">
+            <option value="glyc">Solo glicemica</option>
+            <option value="ins">Solo insulinemica</option>
+            <option value="combined" selected>Combinata</option>
+          </select>
+        </label>
+        <label>Preset
+          <select id="preset"></select>
+        </label>
+        <label>Carico glucosio (g)
+          <input id="glucose_load_g" type="number" min="25" max="100" value="75" />
+        </label>
+        <label>Unità glicemia
+          <select id="glyc_unit">
+            <option>mg/dL</option>
+            <option>mmol/L</option>
+          </select>
+        </label>
+        <label>Unità insulina
+          <select id="ins_unit">
+            <option>µUI/mL</option>
+            <option>pmol/L</option>
+          </select>
+        </label>
+        <label class="span-2 checkbox">
+          <input id="pregnant_mode" type="checkbox" />
+          Modalità gravidanza (range IADPSG per glicemia)
+        </label>
+        <label>Tempi glicemica (csv)
+          <input id="glyc_times" placeholder="0,30,60,90,120" />
+        </label>
+        <label>Tempi insulinemica (csv)
+          <input id="ins_times" placeholder="0,30,60,90,120" />
+        </label>
+      </div>
+
+      <div class="ref-meta-box" id="refsSourceInfo"></div>
+
+      <div class="tables">
+        <div>
+          <h3>Valori glicemia</h3>
+          <table id="glycTable">
+            <thead><tr><th>Tempo</th><th>Valore</th><th>Ref min</th><th>Ref max</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <label class="method-label">Metodica glicemia
+            <input id="methodology_glyc" placeholder="Es. Metodo enzimatico (Esochinasi/G6PDH) - Fotometria UV" />
+          </label>
+        </div>
+        <div>
+          <h3>Valori insulina</h3>
+          <table id="insTable">
+            <thead><tr><th>Tempo</th><th>Valore</th><th>Ref min</th><th>Ref max</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <label class="method-label">Metodica insulina
+            <input id="methodology_ins" placeholder="Es. CLIA / ECLIA / Chemiluminescenza" />
+          </label>
+        </div>
+      </div>
+
+      <label>Note referto
+        <textarea id="exam_notes" placeholder="Note opzionali"></textarea>
+      </label>
+
+      <div class="row">
+        <button id="btnPreview" type="button">Calcola interpretazione</button>
+        <button id="btnSaveExam" type="button">Salva esame nel DB</button>
+      </div>
+    </section>
+  </main>
+
+  <section class="panel full">
+    <h2>3) Referto PDF e risultati</h2>
+
+    <div class="report-settings-grid">
+      <label>Titolo referto
+        <input id="report_title" placeholder="Referto Curva da Carico Orale di Glucosio" />
+      </label>
+      <label>Header riga 1
+        <input id="header_line1" />
+      </label>
+      <label>Header riga 2
+        <input id="header_line2" />
+      </label>
+      <label>Header riga 3
+        <input id="header_line3" />
+      </label>
+
+      <div class="logo-upload-wrap span-2">
+        <label class="logo-upload-label">Logo/intestazione (opzionale)</label>
+        <div class="row">
+          <input type="file" id="header_logo_file" accept="image/*" />
+          <button type="button" id="btnRemoveLogo">Rimuovi logo</button>
+        </div>
+        <div id="logoPreviewBox" class="logo-preview muted">Nessun logo impostato</div>
+      </div>
+
+      <label class="checkbox">
+        <input id="include_interpretation_pdf" type="checkbox" checked />
+        Includi interpretazione nel referto
+      </label>
+      <label class="checkbox">
+        <input id="merge_charts_pdf" type="checkbox" checked />
+        Unisci glicemia + insulina in un unico grafico nel referto
+      </label>
+
+      <div class="row span-2">
+        <button id="btnSaveReportSettings" type="button">Salva impostazioni predefinite referto</button>
+        <small id="reportSettingsStatus" class="muted"></small>
+      </div>
+    </div>
+
+    <div id="summary" class="summary"></div>
+    <div class="row"><button id="btnPdf" type="button">Genera PDF referto</button></div>
+
+    <div class="charts">
+      <div class="chart-card">
+        <h3>Curva glicemica + limiti</h3>
+        <canvas id="glycChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Curva insulinemica + limiti</h3>
+        <canvas id="insChart"></canvas>
+      </div>
+      <div class="chart-card span-2">
+        <h3>Grafico combinato (glicemia + insulina)</h3>
+        <canvas id="combinedChart"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel full">
+    <h2>4) Storico esami paziente selezionato</h2>
+    <div id="examHistory" class="list"></div>
+  </section>
+
+  <script src="./assets/js/config.js"></script>
+  <script type="module" src="./assets/js/app.js"></script>
+</body>
+</html>
