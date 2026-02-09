@@ -135,16 +135,40 @@ async function saveReportSettings() {
 
 function parseMethodologyField(payload) {
   const out = { glyc: "", ins: "" };
-  const raw = String(payload?.methodology || "");
+  const raw = String(payload?.methodology || "").trim();
   if (!raw) return out;
 
-  const rxG = /glicemia\s*:\s*([^|]+)/i;
-  const rxI = /insulina\s*:\s*([^|]+)/i;
-  const g = raw.match(rxG);
-  const i = raw.match(rxI);
+  // Normalizza separatori comuni: newline, pipe, punto e virgola
+  const parts = raw
+    .replace(/\r/g, "\n")
+    .split(/\n+|\|+|;+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-  out.glyc = g?.[1]?.trim() || "";
-  out.ins = i?.[1]?.trim() || "";
+  for (const part of parts) {
+    const p = part.replace(/^Metodica analitica\s*:\s*/i, "").trim();
+
+    const g = p.match(/^glicemia\s*:\s*(.+)$/i);
+    if (g) {
+      out.glyc = g[1].trim();
+      continue;
+    }
+
+    const i = p.match(/^insulina\s*:\s*(.+)$/i);
+    if (i) {
+      out.ins = i[1].trim();
+      continue;
+    }
+
+    // Se non etichettato, usa il primo slot libero
+    if (!out.glyc) out.glyc = p;
+    else if (!out.ins) out.ins = p;
+  }
+
+  // fallback: una sola metodica vale per entrambe
+  if (out.glyc && !out.ins) out.ins = out.glyc;
+  if (out.ins && !out.glyc) out.glyc = out.ins;
+
   return out;
 }
 
@@ -179,9 +203,44 @@ function canvasToImage(canvas) {
 }
 
 function drawHeader(doc, settings, pageWidth, margin) {
+  const hasLogo = !!settings.header_logo_data_url;
+  const line1 = String(settings.header_line1 || "").trim();
+  const line2 = String(settings.header_line2 || "").trim();
+  const line3 = String(settings.header_line3 || "").trim();
+  const hasTextLines = !!(line1 || line2 || line3);
+
+  // Caso richiesto: se i campi testo sono vuoti, il logo occupa quasi tutta l'intestazione
+  if (hasLogo && !hasTextLines) {
+    const boxX = margin;
+    const boxY = 6;
+    const boxW = pageWidth - margin * 2;
+    const boxH = 18;
+
+    try {
+      const props = doc.getImageProperties(settings.header_logo_data_url);
+      const imgW = props?.width || 1;
+      const imgH = props?.height || 1;
+      const scale = Math.min(boxW / imgW, boxH / imgH);
+      const drawW = imgW * scale;
+      const drawH = imgH * scale;
+      const drawX = boxX + (boxW - drawW) / 2;
+      const drawY = boxY + (boxH - drawH) / 2;
+      doc.addImage(settings.header_logo_data_url, "PNG", drawX, drawY, drawW, drawH);
+    } catch {
+      // fallback testo se logo non valido
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text("Intestazione", pageWidth / 2, 16, { align: "center" });
+    }
+
+    doc.setDrawColor(170);
+    doc.line(margin, 26.5, pageWidth - margin, 26.5);
+    return 33;
+  }
+
   let yBase = 9;
 
-  if (settings.header_logo_data_url) {
+  if (hasLogo) {
     try {
       doc.addImage(settings.header_logo_data_url, "PNG", margin, 7, 36, 16);
     } catch {
@@ -191,12 +250,12 @@ function drawHeader(doc, settings, pageWidth, margin) {
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
-  doc.text(settings.header_line1 || "", pageWidth / 2, yBase + 2, { align: "center" });
+  doc.text(line1 || "", pageWidth / 2, yBase + 2, { align: "center" });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9.5);
-  doc.text(settings.header_line2 || "", pageWidth / 2, yBase + 7, { align: "center" });
-  doc.text(settings.header_line3 || "", pageWidth / 2, yBase + 11.5, { align: "center" });
+  doc.text(line2 || "", pageWidth / 2, yBase + 7, { align: "center" });
+  doc.text(line3 || "", pageWidth / 2, yBase + 11.5, { align: "center" });
 
   doc.setDrawColor(170);
   doc.line(margin, 25, pageWidth - margin, 25);
@@ -210,7 +269,8 @@ function ensureSpace(doc, y, needed, settings, pageWidth, pageHeight, margin) {
   return drawHeader(doc, settings, pageWidth, margin);
 }
 
-function drawSectionTitle(doc, text, y, margin, pageWidth) {
+function drawSectionTitle(doc, text, y, margin, pageWidth, settings, pageHeight) {
+  y = ensureSpace(doc, y, 12, settings, pageWidth, pageHeight, margin);
   doc.setFillColor(240, 248, 242);
   doc.rect(margin, y - 4.5, pageWidth - margin * 2, 7, "F");
   doc.setTextColor(20, 98, 61);
@@ -222,30 +282,38 @@ function drawSectionTitle(doc, text, y, margin, pageWidth) {
 }
 
 function drawMiniTable(doc, y, title, unit, rows, methodology, settings, pageWidth, pageHeight, margin) {
-  y = ensureSpace(doc, y, 24, settings, pageWidth, pageHeight, margin);
+  y = ensureSpace(doc, y, 28, settings, pageWidth, pageHeight, margin);
 
+  doc.setTextColor(0, 0, 0);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10.5);
   doc.text(`${title} (${unit})`, margin, y);
-  y += 2;
+  y += 2.5;
 
   const x0 = margin;
-  const widths = [24, 30, 30, 30, 18];
+  const tableW = pageWidth - margin * 2;
+  const widths = [
+    tableW * 0.16, // Tempo
+    tableW * 0.22, // Valore
+    tableW * 0.22, // Ref min
+    tableW * 0.22, // Ref max
+    tableW * 0.18, // Stato
+  ];
   const headers = ["Tempo", "Valore", "Ref min", "Ref max", "Stato"];
-  const rowH = 6;
+  const rowH = 6.2;
 
   doc.setFillColor(237, 242, 247);
-  doc.rect(x0, y + 1, widths.reduce((a, b) => a + b, 0), rowH, "F");
+  doc.rect(x0, y + 1, tableW, rowH, "F");
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
   let x = x0 + 1.8;
   headers.forEach((h, i) => {
-    doc.text(h, x, y + 5);
+    doc.text(h, x, y + 5.1);
     x += widths[i];
   });
 
-  y += rowH + 1;
+  y += rowH + 1.2;
 
   doc.setFont("helvetica", "normal");
   rows.forEach((r, idx) => {
@@ -253,7 +321,7 @@ function drawMiniTable(doc, y, title, unit, rows, methodology, settings, pageWid
 
     if (idx % 2 === 0) {
       doc.setFillColor(250, 250, 250);
-      doc.rect(x0, y, widths.reduce((a, b) => a + b, 0), rowH, "F");
+      doc.rect(x0, y, tableW, rowH, "F");
     }
 
     const statusTxt = r.status === "N" ? "OK" : r.status === "A" ? "ALTO" : "BASSO";
@@ -268,31 +336,46 @@ function drawMiniTable(doc, y, title, unit, rows, methodology, settings, pageWid
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "normal");
       }
-      doc.text(String(v), x, y + 4.3);
+      doc.text(String(v), x, y + 4.4);
       x += widths[i];
     });
 
     y += rowH;
   });
 
-  y += 1;
+  y += 1.2;
+
+  // Reset colore/font prima della metodica (evita testo rosso dopo ALTO/BASSO)
+  doc.setTextColor(0, 0, 0);
+  doc.setFont("helvetica", "normal");
+
   if (methodology) {
-    y = ensureSpace(doc, y, 8, settings, pageWidth, pageHeight, margin);
-    doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
-    doc.text("Metodica analitica:", margin, y + 4);
+    const label = "Metodica analitica:";
+    const textW = pageWidth - margin * 2 - 34;
+    const wrapped = doc.splitTextToSize(methodology, textW);
+    const blockH = Math.max(6, wrapped.length * 4.4) + 2;
+
+    y = ensureSpace(doc, y, blockH + 1, settings, pageWidth, pageHeight, margin);
+
+    doc.setFont("helvetica", "bold");
+    doc.text(label, margin, y + 4);
 
     doc.setFont("helvetica", "normal");
-    const wrapped = doc.splitTextToSize(methodology, pageWidth - margin * 2 - 32);
-    doc.text(wrapped, margin + 32, y + 4);
-    y += Math.max(6, wrapped.length * 4.4);
+    doc.text(wrapped, margin + 34, y + 4);
+
+    y += blockH;
   }
 
-  return y + 2;
+  return y + 1.5;
 }
 
 function drawStatusBadge(doc, y, overall, summary, margin, settings, pageWidth, pageHeight) {
-  y = ensureSpace(doc, y, 14, settings, pageWidth, pageHeight, margin);
+  const textVal = String(summary || "").trim();
+  const wrapped = doc.splitTextToSize(textVal || "-", pageWidth - margin * 2 - 6);
+  const boxH = Math.max(11, wrapped.length * 4.4 + 3);
+
+  y = ensureSpace(doc, y, boxH + 2, settings, pageWidth, pageHeight, margin);
 
   let fill = [230, 245, 230];
   let text = [22, 101, 52];
@@ -306,14 +389,14 @@ function drawStatusBadge(doc, y, overall, summary, margin, settings, pageWidth, 
   }
 
   doc.setFillColor(...fill);
-  doc.roundedRect(margin, y, pageWidth - margin * 2, 11, 1.5, 1.5, "F");
+  doc.roundedRect(margin, y, pageWidth - margin * 2, boxH, 1.5, 1.5, "F");
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...text);
-  doc.setFontSize(10.5);
-  doc.text(summary || "", margin + 2, y + 7);
+  doc.setFontSize(10.2);
+  doc.text(wrapped, margin + 2, y + 6);
   doc.setTextColor(0, 0, 0);
 
-  return y + 14;
+  return y + boxH + 2;
 }
 
 function addFooterOnAllPages(doc, margin) {
@@ -401,7 +484,7 @@ function generatePdf() {
   doc.setTextColor(0, 0, 0);
   y += 8;
 
-  y = drawSectionTitle(doc, "Dati paziente", y, margin, pageWidth);
+  y = drawSectionTitle(doc, "Dati paziente", y, margin, pageWidth, settings, pageHeight);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
 
@@ -444,7 +527,7 @@ function generatePdf() {
     pageHeight
   );
 
-  y = drawSectionTitle(doc, "Risultati analitici", y, margin, pageWidth);
+  y = drawSectionTitle(doc, "Risultati analitici", y, margin, pageWidth, settings, pageHeight);
 
   const showG = payload.curve_mode === "glyc" || payload.curve_mode === "combined";
   const showI = payload.curve_mode === "ins" || payload.curve_mode === "combined";
@@ -480,7 +563,7 @@ function generatePdf() {
   }
 
   if (settings.include_interpretation_pdf) {
-    y = drawSectionTitle(doc, "Interpretazione", y, margin, pageWidth);
+    y = drawSectionTitle(doc, "Interpretazione", y, margin, pageWidth, settings, pageHeight);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9.8);
 
@@ -500,7 +583,7 @@ function generatePdf() {
   }
 
   if (payload.notes) {
-    y = drawSectionTitle(doc, "Note", y, margin, pageWidth);
+    y = drawSectionTitle(doc, "Note", y, margin, pageWidth, settings, pageHeight);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9.8);
     const wrapped = doc.splitTextToSize(payload.notes, pageWidth - margin * 2);
@@ -524,7 +607,7 @@ function generatePdf() {
 
   const charts = chartImagesForReport(payload, settings);
   if (charts.length) {
-    y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth);
+    y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth, settings, pageHeight);
     for (const c of charts) {
       y = ensureSpace(doc, y, 74, settings, pageWidth, pageHeight, margin);
       doc.setFont("helvetica", "bold");
