@@ -190,15 +190,36 @@ function buildRows(times = [], values = [], refs = {}) {
   });
 }
 
-function canvasToImage(canvas) {
+function canvasToImage(canvas, options = {}) {
   if (!canvas) return null;
+  const square = !!options.square;
+  const targetSize = Math.max(600, Number(options.squareSize || 1200));
+
+  const srcW = Number(canvas.width || 0);
+  const srcH = Number(canvas.height || 0);
+  if (!srcW || !srcH) return null;
+
   const tmp = document.createElement("canvas");
-  tmp.width = canvas.width;
-  tmp.height = canvas.height;
+  if (square) {
+    tmp.width = targetSize;
+    tmp.height = targetSize;
+  } else {
+    tmp.width = srcW;
+    tmp.height = srcH;
+  }
+
   const tctx = tmp.getContext("2d");
   tctx.fillStyle = "#ffffff";
   tctx.fillRect(0, 0, tmp.width, tmp.height);
-  tctx.drawImage(canvas, 0, 0);
+
+  if (square) {
+    // Richiesta utente: grafici con sviluppo quadrato e area piena.
+    // Stretch controllato per riempire tutta l'area del quadrato.
+    tctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
+  } else {
+    tctx.drawImage(canvas, 0, 0);
+  }
+
   return tmp.toDataURL("image/png", 1.0);
 }
 
@@ -236,6 +257,14 @@ function addImageContained(doc, dataUrl, x, y, boxW, boxH) {
 
   doc.addImage(dataUrl, "PNG", drawX, drawY, drawW, drawH);
 }
+
+function addImageFilled(doc, dataUrl, x, y, boxW, boxH) {
+  if (!dataUrl) return;
+  doc.setDrawColor(225);
+  doc.rect(x, y, boxW, boxH);
+  doc.addImage(dataUrl, "PNG", x, y, boxW, boxH);
+}
+
 
 function drawHeader(doc, settings, pageWidth, margin) {
   const hasLogo = !!settings.header_logo_data_url;
@@ -436,6 +465,59 @@ function drawStatusBadge(doc, y, overall, summary, margin, settings, pageWidth, 
   return y + boxH + 2;
 }
 
+function renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, margin) {
+  if (!charts?.length) return y;
+
+  // Spazio di separazione sicuro con il testo precedente
+  y += 2.5;
+  y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth, settings, pageHeight);
+
+  const safeBottom = pageHeight - 20;
+  const gap = 5;
+  const titleGap = 2.6;
+  const labelH = 3.2;
+
+  if (charts.length === 2) {
+    const maxSideByWidth = (pageWidth - margin * 2 - gap) / 2;
+    const availableH = Math.max(18, safeBottom - (y + titleGap + labelH + 3));
+    let side = Math.min(maxSideByWidth, availableH);
+
+    // Priorità: far rientrare i grafici nella stessa pagina dei dati
+    side = Math.max(18, side);
+
+    const totalW = side * 2 + gap;
+    const startX = margin + (pageWidth - margin * 2 - totalW) / 2;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.1);
+    doc.text(charts[0].title, startX, y + labelH);
+    doc.text(charts[1].title, startX + side + gap, y + labelH);
+
+    const boxY = y + titleGap + labelH;
+    addImageFilled(doc, charts[0].image, startX, boxY, side, side);
+    addImageFilled(doc, charts[1].image, startX + side + gap, boxY, side, side);
+
+    return boxY + side + 3;
+  }
+
+  // Caso singolo grafico
+  const maxSideByWidth = pageWidth - margin * 2;
+  const availableH = Math.max(18, safeBottom - (y + titleGap + labelH + 3));
+  let side = Math.min(maxSideByWidth, availableH, 120);
+  side = Math.max(18, side);
+
+  const x = (pageWidth - side) / 2;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9.3);
+  doc.text(charts[0].title, margin, y + labelH);
+
+  const boxY = y + titleGap + labelH;
+  addImageFilled(doc, charts[0].image, x, boxY, side, side);
+
+  return boxY + side + 3;
+}
+
 function addFooterOnAllPages(doc, margin) {
   const pageCount = doc.getNumberOfPages();
   for (let p = 1; p <= pageCount; p++) {
@@ -466,17 +548,17 @@ function chartImagesForReport(payload, settings) {
   const out = [];
 
   if (merge && mode === "combined" && c) {
-    const img = canvasToImage(c);
+    const img = canvasToImage(c, { square: true, squareSize: 1200 });
     if (img) out.push({ title: "Grafico combinato glicemia + insulina", image: img });
     return out;
   }
 
   if ((mode === "glyc" || mode === "combined") && g) {
-    const img = canvasToImage(g);
+    const img = canvasToImage(g, { square: true, squareSize: 1200 });
     if (img) out.push({ title: "Curva glicemica", image: img });
   }
   if ((mode === "ins" || mode === "combined") && i) {
-    const img = canvasToImage(i);
+    const img = canvasToImage(i, { square: true, squareSize: 1200 });
     if (img) out.push({ title: "Curva insulinemica", image: img });
   }
 
@@ -599,6 +681,14 @@ function generatePdf() {
     );
   }
 
+
+// Grafici subito dopo i risultati analitici:
+// in questo modo restano nella stessa pagina dei dati, evitando sovrapposizioni.
+const charts = chartImagesForReport(payload, settings);
+if (charts.length) {
+  y = renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, margin);
+}
+
   if (settings.include_interpretation_pdf) {
     y = drawSectionTitle(doc, "Interpretazione", y, margin, pageWidth, settings, pageHeight);
     doc.setFont("helvetica", "normal");
@@ -642,49 +732,6 @@ function generatePdf() {
     doc.text(wrapped, margin, y + 4);
     doc.setTextColor(0, 0, 0);
     y += blockH;
-  }
-
-  const charts = chartImagesForReport(payload, settings);
-  if (charts.length) {
-    // Spazio extra per separare chiaramente testo/interpretazione e area grafici
-    y += 3;
-    y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth, settings, pageHeight);
-
-    // Caso richiesto: due grafici affiancati in forma quadrata
-    if (charts.length === 2) {
-      const gap = 5;
-      const boxW = (pageWidth - margin * 2 - gap) / 2;
-      const boxH = boxW; // quadrato
-      const needed = boxH + 12;
-      y = ensureSpace(doc, y, needed, settings, pageWidth, pageHeight, margin);
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9.2);
-      doc.text(charts[0].title, margin, y + 3);
-      doc.text(charts[1].title, margin + boxW + gap, y + 3);
-
-      const yImg = y + 5;
-      addImageContained(doc, charts[0].image, margin, yImg, boxW, boxH);
-      addImageContained(doc, charts[1].image, margin + boxW + gap, yImg, boxW, boxH);
-
-      y = yImg + boxH + 4;
-    } else {
-      // Un solo grafico: resa quadrata e centrata per evitare distorsioni
-      for (const c of charts) {
-        const side = Math.min(pageWidth - margin * 2, 120);
-        const x = (pageWidth - side) / 2;
-        const needed = side + 12;
-
-        y = ensureSpace(doc, y, needed, settings, pageWidth, pageHeight, margin);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(9.5);
-        doc.text(c.title, margin, y + 3);
-
-        const yImg = y + 5;
-        addImageContained(doc, c.image, x, yImg, side, side);
-        y = yImg + side + 4;
-      }
-    }
   }
 
   addFooterOnAllPages(doc, margin);
