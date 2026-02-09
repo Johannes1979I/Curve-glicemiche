@@ -2,7 +2,12 @@ export const state = {
   selectedPatient: null,
   selectedExamId: null,
   presets: [],
-  refs: null,
+  refs: {
+    default_glyc_refs: {},
+    pregnant_glyc_refs: {},
+    default_ins_refs: {},
+    metadata: null,
+  },
   lastPayload: null,
   interpretation: null,
   charts: {

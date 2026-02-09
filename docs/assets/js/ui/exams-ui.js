@@ -49,7 +49,7 @@ function setPresetOptions() {
 function renderRefsSourceInfo() {
   const box = document.getElementById("refsSourceInfo");
   if (!box) return;
-  const meta = state.refs.metadata;
+  const meta = state.refs?.metadata;
   if (!meta) {
     box.innerHTML = "";
     return;
@@ -99,8 +99,10 @@ function applyPresetToTimes() {
 function getCurrentRefs() {
   const pregnant = document.getElementById("pregnant_mode").checked;
   return {
-    glyc: pregnant ? state.refs.pregnant_glyc_refs : state.refs.default_glyc_refs,
-    ins: state.refs.default_ins_refs,
+    glyc: pregnant
+      ? (state.refs?.pregnant_glyc_refs || {})
+      : (state.refs?.default_glyc_refs || {}),
+    ins: state.refs?.default_ins_refs || {},
   };
 }
 
@@ -300,6 +302,12 @@ export function bindExamUI() {
 
 export function initPresetsAndRefs(presetsPayload) {
   state.presets = presetsPayload.presets || [];
+
+  // Safety net: avoid "Cannot set properties of null" if refs is not initialized
+  if (!state.refs || typeof state.refs !== "object") {
+    state.refs = {};
+  }
+
   state.refs.default_glyc_refs = presetsPayload.default_glyc_refs || {};
   state.refs.pregnant_glyc_refs = presetsPayload.pregnant_glyc_refs || {};
   state.refs.default_ins_refs = presetsPayload.default_ins_refs || {};

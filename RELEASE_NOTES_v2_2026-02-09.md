@@ -54,3 +54,9 @@
 - La cartella `docs/` è pronta per GitHub Pages.
 - È presente fallback locale (`local-api`) quando backend non è raggiungibile.
 
+
+
+## Hotfix 2026-02-09b
+- Fixed startup error on GitHub Pages: `Cannot set properties of null (setting 'default_glyc_refs')`.
+- Initialized `state.refs` object in both `docs` and `frontend`.
+- Added defensive guards in `ui/exams-ui.js` for refs access and presets initialization.
