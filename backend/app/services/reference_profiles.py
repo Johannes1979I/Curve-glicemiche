@@ -37,10 +37,12 @@ DEFAULT_INS_REFS = {
 }
 
 DEFAULT_SOURCES = [
-    "WHO (2013) - Diagnostic criteria and classification of hyperglycaemia first detected in pregnancy",
-    "IADPSG Consensus Panel (2010) - 75 g OGTT in pregnancy (92 / 180 / 153 mg/dL)",
-    "American Diabetes Association - Criteria for diagnosis of diabetes and prediabetes with OGTT",
-    "ADA Insulin Standardization Workgroup / Clinical Chemistry - insulin assay variability",
+    "ADA Standards of Care in Diabetes—2026 (Diagnosis and Classification of Diabetes)",
+    "ADA Diabetes Diagnosis & Tests (criteri OGTT/FPG/A1C, aggiornamento continuo)",
+    "IDF Global Clinical Practice Recommendations 2025",
+    "WHO guideline: Hyperglycaemia first detected in pregnancy (criteri OMS)",
+    "IADPSG Consensus (75 g OGTT gravidanza: 92/180/153 mg/dL)",
+    "Clinical Chemistry / ADA insulin standardization: variabilità dei dosaggi insulinici",
 ]
 
 DEFAULT_METHODS = {
@@ -54,8 +56,8 @@ DEFAULT_NOTES = (
     "in base a metodica analitica e popolazione di riferimento."
 )
 
-DATASET_NAME = "World Endocrine Congress & Guideline Harmonized Profile"
-DATASET_VERSION = "2026.02"
+DATASET_NAME = "Global Endocrine Guideline Profile"
+DATASET_VERSION = "2026.02.10"
 
 
 def _new_default_profile() -> models.ReferenceProfile:

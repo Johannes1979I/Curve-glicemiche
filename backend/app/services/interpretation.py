@@ -82,7 +82,7 @@ def interpret_exam(payload: Dict[str, Any]) -> Dict[str, Any]:
     summary_map = {
         "normal": "Referto complessivamente nei limiti di riferimento.",
         "warning": "Referto con alterazioni borderline/moderate da correlare clinicamente.",
-        "danger": "Referto con alterazioni significative: necessaria valutazione medica."
+        "danger": "Referto con alterazioni: necessaria valutazione medica."
     }
 
     return {

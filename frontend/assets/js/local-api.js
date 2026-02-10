@@ -38,14 +38,16 @@ const DEFAULT_METHODS = {
 const REFERENCES_METADATA = {
   profile_id: "global-endocrine-consensus-v2",
   profile_name: "Global Endocrine Consensus DB (profilo locale)",
-  dataset_name: "World Endocrine Congress & Guideline Harmonized Profile",
-  dataset_version: "2026.02",
-  updated_at: "2026-02-09",
+  dataset_name: "Global Endocrine Guideline Profile",
+  dataset_version: "2026.02.10",
+  updated_at: "2026-02-10",
   sources: [
-    "WHO (2013) - Diagnostic criteria and classification of hyperglycaemia first detected in pregnancy",
-    "IADPSG Consensus Panel (2010) - 75 g OGTT thresholds 92/180/153 mg/dL in pregnancy",
-    "ADA Standards of Care - criteri diagnostici OGTT per adulti non gravidi",
-    "ADA Insulin Standardization Workgroup / Clin Chem - variabilità dei dosaggi insulinici",
+    "ADA Standards of Care in Diabetes—2026 (Diagnosis and Classification)",
+    "ADA Diabetes Diagnosis & Tests (criteri OGTT/FPG/A1C)",
+    "IDF Global Clinical Practice Recommendations 2025",
+    "WHO Hyperglycaemia in pregnancy guideline",
+    "IADPSG Consensus 75 g OGTT in gravidanza (92/180/153 mg/dL)",
+    "Clinical Chemistry / ADA insulin standardization: variabilità assay insulinici",
   ],
   notes:
     "Le soglie diagnostiche principali sono allineate alle linee guida internazionali. I punti intermedi della curva e i range insulinemici sono configurabili dal laboratorio in base al metodo analitico e alla popolazione di riferimento.",
@@ -147,7 +149,7 @@ function summaryFromStatus(overall) {
   const map = {
     normal: "Referto complessivamente nei limiti di riferimento.",
     warning: "Referto con alterazioni borderline/moderate da correlare clinicamente.",
-    danger: "Referto con alterazioni significative: necessaria valutazione medica.",
+    danger: "Referto con alterazioni: necessaria valutazione medica.",
   };
   return map[overall] || map.normal;
 }
