@@ -2,6 +2,7 @@ import { api, getApiMode } from "./api.js";
 import { bindPatientUI, refreshPatients } from "./ui/patients-ui.js";
 import { bindExamUI, initPresetsAndRefs } from "./ui/exams-ui.js";
 import { bindReportUI } from "./ui/report-ui.js";
+import { bindCatalogUI } from "./ui/catalog-ui.js";
 
 function renderRuntimeMode() {
   const el = document.getElementById("runtimeMode");
@@ -24,6 +25,7 @@ async function boot() {
 
     bindPatientUI();
     bindExamUI();
+    bindCatalogUI();
     bindReportUI();
 
     await refreshPatients();

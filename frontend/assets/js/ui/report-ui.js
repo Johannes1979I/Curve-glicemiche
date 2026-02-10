@@ -1,13 +1,13 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 
-const DEFAULT_REPORT_SETTINGS = {
-  report_title: "Referto Curva da Carico Orale di Glucosio",
-  header_line1: "Laboratorio Analisi",
-  header_line2: "Centro Polispecialistico",
-  header_line3: "Referto di laboratorio",
+const FALLBACK_REPORT_SETTINGS = {
+  report_title: "Referto Esame Microbiologico con MIC",
+  header_line1: "Centro Polispecialistico Giovanni Paolo I srl",
+  header_line2: "Laboratorio Analisi",
+  header_line3: "",
   include_interpretation_pdf: true,
-  merge_charts_pdf: true,
+  include_commercial_names_pdf: true,
   header_logo_data_url: null,
 };
 
@@ -15,815 +15,422 @@ function $(id) {
   return document.getElementById(id);
 }
 
-function esc(str) {
-  return String(str ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+function safe(v) {
+  return String(v ?? "").trim();
 }
 
-function parseBool(v, fallback = false) {
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  if (typeof v === "string") {
-    const t = v.trim().toLowerCase();
-    if (["1", "true", "si", "sì", "yes", "on"].includes(t)) return true;
-    if (["0", "false", "no", "off"].includes(t)) return false;
-  }
-  return fallback;
+function csv(list) {
+  return (list || []).map((x) => String(x).trim()).filter(Boolean).join(", ");
 }
 
-function nowIT() {
-  const d = new Date();
+function interpText(v) {
+  const x = String(v || "-").toUpperCase();
+  if (x === "S") return "Sensibile";
+  if (x === "I") return "Sensibile con aumentata esposizione";
+  if (x === "R") return "Resistente";
+  return "Non interpretato";
+}
+
+function fmtDate(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+  const yy = d.getFullYear();
+  return `${dd}/${mm}/${yy}`;
 }
 
-function fmtDateIT(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+function patientFullName(patient) {
+  return `${safe(patient?.surname)} ${safe(patient?.name)}`.trim() || "-";
 }
 
-function normalizeSettings(data) {
-  const s = { ...DEFAULT_REPORT_SETTINGS, ...(data || {}) };
-  s.include_interpretation_pdf = parseBool(s.include_interpretation_pdf, true);
-  s.merge_charts_pdf = parseBool(s.merge_charts_pdf, true);
-  s.header_logo_data_url = s.header_logo_data_url || null;
-  return s;
+function readCurrentReportSettingsFromUI() {
+  return {
+    report_title: $("report_title")?.value || "",
+    header_line1: $("header_line1")?.value || "",
+    header_line2: $("header_line2")?.value || "",
+    header_line3: $("header_line3")?.value || "",
+    include_interpretation_pdf: !!$("include_interpretation_pdf")?.checked,
+    include_commercial_names_pdf: !!$("include_commercial_names_pdf")?.checked,
+    header_logo_data_url: state.reportSettings?.header_logo_data_url || null,
+  };
 }
 
-function setStatus(msg, ok = true) {
-  const el = $("reportSettingsStatus");
-  if (!el) return;
-  el.textContent = msg || "";
-  el.classList.toggle("status-ok", !!ok);
-  el.classList.toggle("status-err", !ok);
+function applyReportSettingsToUI(s) {
+  $("report_title").value = s.report_title || "";
+  $("header_line1").value = s.header_line1 || "";
+  $("header_line2").value = s.header_line2 || "";
+  $("header_line3").value = s.header_line3 || "";
+  $("include_interpretation_pdf").checked = !!s.include_interpretation_pdf;
+  $("include_commercial_names_pdf").checked = !!s.include_commercial_names_pdf;
+  renderLogoPreview(s.header_logo_data_url || null);
 }
 
-function setLogoPreview(dataUrl) {
+function renderLogoPreview(dataUrl) {
   const box = $("logoPreviewBox");
   if (!box) return;
-
+  box.innerHTML = "";
   if (!dataUrl) {
-    box.classList.add("muted");
-    box.innerHTML = "Nessun logo impostato";
+    box.innerHTML = '<span class="muted">Nessun logo caricato</span>';
     return;
   }
-
-  box.classList.remove("muted");
-  box.innerHTML = `<img src="${esc(dataUrl)}" alt="Logo intestazione" class="logo-preview-img" />`;
+  const img = document.createElement("img");
+  img.src = dataUrl;
+  img.alt = "Logo intestazione";
+  box.appendChild(img);
 }
 
-function applySettingsToForm(settings) {
-  $("report_title").value = settings.report_title || DEFAULT_REPORT_SETTINGS.report_title;
-  $("header_line1").value = settings.header_line1 || "";
-  $("header_line2").value = settings.header_line2 || "";
-  $("header_line3").value = settings.header_line3 || "";
-  $("include_interpretation_pdf").checked = !!settings.include_interpretation_pdf;
-  $("merge_charts_pdf").checked = !!settings.merge_charts_pdf;
-  setLogoPreview(settings.header_logo_data_url);
-}
-
-function getFormSettings() {
-  return normalizeSettings({
-    report_title: $("report_title").value.trim() || DEFAULT_REPORT_SETTINGS.report_title,
-    header_line1: $("header_line1").value.trim(),
-    header_line2: $("header_line2").value.trim(),
-    header_line3: $("header_line3").value.trim(),
-    include_interpretation_pdf: $("include_interpretation_pdf").checked,
-    merge_charts_pdf: $("merge_charts_pdf").checked,
-    header_logo_data_url: state.reportSettings?.header_logo_data_url || null,
+async function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = reject;
+    fr.readAsDataURL(file);
   });
 }
 
-async function loadReportSettings() {
-  try {
-    const settings = normalizeSettings(await api.getReportSettings());
-    state.reportSettings = settings;
-    applySettingsToForm(settings);
-    setStatus(`Impostazioni caricate (${nowIT()})`, true);
-  } catch (err) {
-    console.error(err);
-    state.reportSettings = normalizeSettings();
-    applySettingsToForm(state.reportSettings);
-    setStatus("Impossibile caricare le impostazioni. Uso i default locali.", false);
-  }
+function ensureSpace(doc, y, need, marginTop = 12, marginBottom = 12) {
+  if (y + need <= 297 - marginBottom) return y;
+  doc.addPage();
+  return marginTop;
 }
-
-async function saveReportSettings() {
-  const payload = getFormSettings();
-  try {
-    const saved = normalizeSettings(await api.saveReportSettings(payload));
-    state.reportSettings = saved;
-    applySettingsToForm(saved);
-    setStatus(`Impostazioni salvate (${nowIT()})`, true);
-  } catch (err) {
-    console.error(err);
-    setStatus(`Errore salvataggio impostazioni: ${err?.message || err}`, false);
-  }
-}
-
-function parseMethodologyField(payload) {
-  const out = { glyc: "", ins: "" };
-  const raw = String(payload?.methodology || "").trim();
-  if (!raw) return out;
-
-  // Normalizza separatori comuni: newline, pipe, punto e virgola
-  const parts = raw
-    .replace(/\r/g, "\n")
-    .split(/\n+|\|+|;+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  for (const part of parts) {
-    const p = part.replace(/^Metodica analitica\s*:\s*/i, "").trim();
-
-    const g = p.match(/^glicemia\s*:\s*(.+)$/i);
-    if (g) {
-      out.glyc = g[1].trim();
-      continue;
-    }
-
-    const i = p.match(/^insulina\s*:\s*(.+)$/i);
-    if (i) {
-      out.ins = i[1].trim();
-      continue;
-    }
-
-    // Se non etichettato, usa il primo slot libero
-    if (!out.glyc) out.glyc = p;
-    else if (!out.ins) out.ins = p;
-  }
-
-  // fallback: una sola metodica vale per entrambe
-  if (out.glyc && !out.ins) out.ins = out.glyc;
-  if (out.ins && !out.glyc) out.glyc = out.ins;
-
-  return out;
-}
-
-function buildRows(times = [], values = [], refs = {}) {
-  return times.map((t, i) => {
-    const raw = values?.[i];
-    const hasValue = !(raw === null || raw === undefined || String(raw).trim?.() === "");
-    const value = hasValue ? Number(String(raw).replace(",", ".")) : null;
-
-    const ref = refs?.[String(t)] || refs?.[t] || { min: 0, max: 0 };
-    const refMin = Number(ref.min ?? 0);
-    const refMax = Number(ref.max ?? 0);
-
-    let status = "-";
-    if (hasValue && Number.isFinite(value)) {
-      status = "N";
-      if (value < refMin) status = "B";
-      else if (value > refMax) status = "A";
-    }
-
-    return {
-      time: t,
-      value: Number.isFinite(value) ? value : null,
-      refMin: Number.isFinite(refMin) ? refMin : 0,
-      refMax: Number.isFinite(refMax) ? refMax : 0,
-      status,
-    };
-  });
-}
-
-function canvasToImage(canvas, options = {}) {
-  if (!canvas) return null;
-  const square = !!options.square;
-  const targetSize = Math.max(600, Number(options.squareSize || 1200));
-
-  const srcW = Number(canvas.width || 0);
-  const srcH = Number(canvas.height || 0);
-  if (!srcW || !srcH) return null;
-
-  const tmp = document.createElement("canvas");
-  if (square) {
-    tmp.width = targetSize;
-    tmp.height = targetSize;
-  } else {
-    tmp.width = srcW;
-    tmp.height = srcH;
-  }
-
-  const tctx = tmp.getContext("2d");
-  tctx.fillStyle = "#ffffff";
-  tctx.fillRect(0, 0, tmp.width, tmp.height);
-
-  if (square) {
-    // Mantiene le proporzioni (no stretching): il grafico resta leggibile
-    // e viene centrato in un riquadro quadrato.
-    const srcRatio = srcW / srcH;
-    const dstRatio = tmp.width / tmp.height;
-
-    let drawW;
-    let drawH;
-    let dx;
-    let dy;
-
-    if (srcRatio > dstRatio) {
-      drawW = tmp.width;
-      drawH = drawW / srcRatio;
-      dx = 0;
-      dy = (tmp.height - drawH) / 2;
-    } else {
-      drawH = tmp.height;
-      drawW = drawH * srcRatio;
-      dx = (tmp.width - drawW) / 2;
-      dy = 0;
-    }
-
-    tctx.drawImage(canvas, dx, dy, drawW, drawH);
-  } else {
-    tctx.drawImage(canvas, 0, 0);
-  }
-
-  return tmp.toDataURL("image/png", 1.0);
-}
-
-function addImageContained(doc, dataUrl, x, y, boxW, boxH) {
-  if (!dataUrl) return;
-
-  // bordo contenitore (aiuta la leggibilità)
-  doc.setDrawColor(225);
-  doc.rect(x, y, boxW, boxH);
-
-  let drawX = x;
-  let drawY = y;
-  let drawW = boxW;
-  let drawH = boxH;
-
-  try {
-    const props = doc.getImageProperties(dataUrl);
-    const imgW = Number(props?.width || 1);
-    const imgH = Number(props?.height || 1);
-    const imgRatio = imgW / imgH;
-    const boxRatio = boxW / boxH;
-
-    if (imgRatio > boxRatio) {
-      drawW = boxW;
-      drawH = boxW / imgRatio;
-      drawY = y + (boxH - drawH) / 2;
-    } else {
-      drawH = boxH;
-      drawW = boxH * imgRatio;
-      drawX = x + (boxW - drawW) / 2;
-    }
-  } catch {
-    // fallback: disegna a pieno box
-  }
-
-  doc.addImage(dataUrl, "PNG", drawX, drawY, drawW, drawH);
-}
-
-function addImageFilled(doc, dataUrl, x, y, boxW, boxH) {
-  if (!dataUrl) return;
-  doc.setDrawColor(225);
-  doc.rect(x, y, boxW, boxH);
-  doc.addImage(dataUrl, "PNG", x, y, boxW, boxH);
-}
-
 
 function drawHeader(doc, settings, pageWidth, margin) {
-  const hasLogo = !!settings.header_logo_data_url;
-  const line1 = String(settings.header_line1 || "").trim();
-  const line2 = String(settings.header_line2 || "").trim();
-  const line3 = String(settings.header_line3 || "").trim();
-  const hasTextLines = !!(line1 || line2 || line3);
+  let y = 10;
+  const hasText = [settings.header_line1, settings.header_line2, settings.header_line3].some((x) => safe(x));
 
-  // Caso richiesto: se i campi testo sono vuoti, il logo occupa quasi tutta l'intestazione
-  if (hasLogo && !hasTextLines) {
-    const boxX = margin;
-    const boxY = 6;
-    const boxW = pageWidth - margin * 2;
-    const boxH = 18;
-
+  // Area logo/intestazione
+  if (settings.header_logo_data_url) {
+    const logoH = hasText ? 24 : 36;
     try {
-      const props = doc.getImageProperties(settings.header_logo_data_url);
-      const imgW = props?.width || 1;
-      const imgH = props?.height || 1;
-      const scale = Math.min(boxW / imgW, boxH / imgH);
-      const drawW = imgW * scale;
-      const drawH = imgH * scale;
-      const drawX = boxX + (boxW - drawW) / 2;
-      const drawY = boxY + (boxH - drawH) / 2;
-      doc.addImage(settings.header_logo_data_url, "PNG", drawX, drawY, drawW, drawH);
-    } catch {
-      // fallback testo se logo non valido
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(10);
-      doc.text("Intestazione", pageWidth / 2, 16, { align: "center" });
-    }
-
-    doc.setDrawColor(170);
-    doc.line(margin, 26.5, pageWidth - margin, 26.5);
-    return 33;
-  }
-
-  let yBase = 9;
-
-  if (hasLogo) {
-    try {
-      doc.addImage(settings.header_logo_data_url, "PNG", margin, 7, 36, 16);
-    } catch {
-      // Ignora logo non valido
+      doc.addImage(settings.header_logo_data_url, "PNG", margin, y, pageWidth - margin * 2, logoH, undefined, "FAST");
+      doc.setDrawColor(200, 210, 226);
+      doc.rect(margin, y, pageWidth - margin * 2, logoH);
+      y += logoH + 3;
+    } catch (_) {
+      // fallback silenzioso
     }
   }
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text(line1 || "", pageWidth / 2, yBase + 2, { align: "center" });
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9.5);
-  doc.text(line2 || "", pageWidth / 2, yBase + 7, { align: "center" });
-  doc.text(line3 || "", pageWidth / 2, yBase + 11.5, { align: "center" });
-
-  doc.setDrawColor(170);
-  doc.line(margin, 25, pageWidth - margin, 25);
-
-  return 31;
-}
-
-function ensureSpace(doc, y, needed, settings, pageWidth, pageHeight, margin) {
-  // Manteniamo una zona di sicurezza in basso per evitare sovrapposizioni con il footer
-  const safeBottom = pageHeight - 20;
-  if (y + needed <= safeBottom) return y;
-  doc.addPage();
-  return drawHeader(doc, settings, pageWidth, margin);
-}
-
-function drawSectionTitle(doc, text, y, margin, pageWidth, settings, pageHeight) {
-  y = ensureSpace(doc, y, 12, settings, pageWidth, pageHeight, margin);
-  doc.setFillColor(240, 248, 242);
-  doc.rect(margin, y - 4.5, pageWidth - margin * 2, 7, "F");
-  doc.setTextColor(20, 98, 61);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text(text, margin + 2, y);
-  doc.setTextColor(0, 0, 0);
-  return y + 5;
-}
-
-function drawMiniTable(doc, y, title, unit, rows, methodology, settings, pageWidth, pageHeight, margin) {
-  y = ensureSpace(doc, y, 28, settings, pageWidth, pageHeight, margin);
-
-  doc.setTextColor(0, 0, 0);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10.5);
-  doc.text(`${title} (${unit})`, margin, y);
-  y += 2.5;
-
-  const x0 = margin;
-  const tableW = pageWidth - margin * 2;
-  const widths = [
-    tableW * 0.16, // Tempo
-    tableW * 0.22, // Valore
-    tableW * 0.22, // Ref min
-    tableW * 0.22, // Ref max
-    tableW * 0.18, // Stato
-  ];
-  const headers = ["Tempo", "Valore", "Ref min", "Ref max", "Stato"];
-  const rowH = 6.2;
-
-  doc.setFillColor(237, 242, 247);
-  doc.rect(x0, y + 1, tableW, rowH, "F");
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  let x = x0 + 1.8;
-  headers.forEach((h, i) => {
-    doc.text(h, x, y + 5.1);
-    x += widths[i];
-  });
-
-  y += rowH + 1.2;
-
-  doc.setFont("helvetica", "normal");
-  rows.forEach((r, idx) => {
-    y = ensureSpace(doc, y, rowH + 2, settings, pageWidth, pageHeight, margin);
-
-    if (idx % 2 === 0) {
-      doc.setFillColor(250, 250, 250);
-      doc.rect(x0, y, tableW, rowH, "F");
-    }
-
-    const statusTxt = r.status === "N" ? "OK" : r.status === "A" ? "ALTO" : r.status === "B" ? "BASSO" : "-";
-    const valStr = r.value === null || r.value === undefined ? "-" : r.value.toFixed(1);
-    const vals = [`${r.time}'`, valStr, `${r.refMin.toFixed(1)}`, `${r.refMax.toFixed(1)}`, statusTxt];
-
-    x = x0 + 1.8;
-    vals.forEach((v, i) => {
-      if (i === 4 && statusTxt !== "OK") {
-        doc.setTextColor(185, 28, 28);
-        doc.setFont("helvetica", "bold");
-      } else {
-        doc.setTextColor(0, 0, 0);
-        doc.setFont("helvetica", "normal");
-      }
-      doc.text(String(v), x, y + 4.4);
-      x += widths[i];
-    });
-
-    y += rowH;
-  });
-
-  y += 1.2;
-
-  // Reset colore/font prima della metodica (evita testo rosso dopo ALTO/BASSO)
-  doc.setTextColor(0, 0, 0);
-  doc.setFont("helvetica", "normal");
-
-  if (methodology) {
-    doc.setFontSize(9);
-    const label = "Metodica analitica:";
-    const textW = pageWidth - margin * 2 - 34;
-    const wrapped = doc.splitTextToSize(methodology, textW);
-    const blockH = Math.max(6, wrapped.length * 4.4) + 2;
-
-    y = ensureSpace(doc, y, blockH + 1, settings, pageWidth, pageHeight, margin);
-
+  if (hasText) {
+    doc.setTextColor(20, 38, 63);
     doc.setFont("helvetica", "bold");
-    doc.text(label, margin, y + 4);
+    doc.setFontSize(12);
+    if (safe(settings.header_line1)) doc.text(safe(settings.header_line1), pageWidth / 2, y, { align: "center" });
+    y += safe(settings.header_line1) ? 5 : 0;
 
     doc.setFont("helvetica", "normal");
-    doc.text(wrapped, margin + 34, y + 4);
-
-    y += blockH;
+    doc.setFontSize(10);
+    if (safe(settings.header_line2)) doc.text(safe(settings.header_line2), pageWidth / 2, y, { align: "center" });
+    y += safe(settings.header_line2) ? 4.5 : 0;
+    if (safe(settings.header_line3)) doc.text(safe(settings.header_line3), pageWidth / 2, y, { align: "center" });
+    y += safe(settings.header_line3) ? 5 : 2;
   }
 
-  return y + 1.5;
+  const title = safe(settings.report_title) || "Referto Esame Microbiologico con MIC";
+  doc.setFillColor(236, 244, 255);
+  doc.setDrawColor(183, 205, 236);
+  doc.roundedRect(margin, y, pageWidth - margin * 2, 9, 2, 2, "FD");
+  doc.setTextColor(16, 51, 104);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.text(title, pageWidth / 2, y + 6, { align: "center" });
+
+  return y + 12;
 }
 
-function drawStatusBadge(doc, y, overall, summary, margin, settings, pageWidth, pageHeight) {
-  const textVal = String(summary || "").trim();
-  const wrapped = doc.splitTextToSize(textVal || "-", pageWidth - margin * 2 - 6);
-  const boxH = Math.max(11, wrapped.length * 4.4 + 3);
+function drawPatientBox(doc, y, pageWidth, margin, payload, patient) {
+  const boxW = pageWidth - margin * 2;
+  const rowH = 7;
 
-  y = ensureSpace(doc, y, boxH + 2, settings, pageWidth, pageHeight, margin);
+  doc.setFillColor(247, 250, 255);
+  doc.setDrawColor(202, 215, 232);
+  doc.roundedRect(margin, y, boxW, rowH * 4 + 4, 2, 2, "FD");
 
-  let fill = [230, 245, 230];
-  let text = [22, 101, 52];
-  if (overall === "warning") {
-    fill = [255, 248, 220];
-    text = [146, 64, 14];
-  }
-  if (overall === "danger") {
-    fill = [254, 226, 226];
-    text = [153, 27, 27];
-  }
-
-  doc.setFillColor(...fill);
-  doc.roundedRect(margin, y, pageWidth - margin * 2, boxH, 1.5, 1.5, "F");
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(...text);
+  doc.setTextColor(24, 41, 67);
+  doc.setFontSize(10);
+  doc.text("Dati paziente e campione", margin + 3, y + 5);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.2);
+
+  const leftX = margin + 3;
+  const rightX = margin + boxW / 2 + 2;
+  let yy = y + 10;
+
+  doc.text(`Paziente: ${patientFullName(patient)}`, leftX, yy);
+  doc.text(`Data nascita: ${fmtDate(patient?.birth_date) || "-"}`, rightX, yy);
+  yy += rowH;
+
+  doc.text(`Sesso: ${safe(patient?.sex) || "-"}`, leftX, yy);
+  doc.text(`CF: ${safe(patient?.fiscal_code) || "-"}`, rightX, yy);
+  yy += rowH;
+
+  doc.text(`Data esame: ${fmtDate(payload?.exam_date) || "-"}`, leftX, yy);
+  doc.text(`Accettazione: ${safe(payload?.acceptance_number) || "-"}`, rightX, yy);
+  yy += rowH;
+
+  doc.text(`Campione: ${safe(payload?.specimen_type) || "-"}`, leftX, yy);
+  doc.text(`Microrganismo: ${safe(payload?.microorganism) || "-"}`, rightX, yy);
+
+  return y + rowH * 4 + 8;
+}
+
+function drawTableHeader(doc, y, x, cols) {
+  let cursor = x;
+  doc.setFillColor(235, 243, 255);
+  doc.setDrawColor(175, 196, 226);
+  doc.setTextColor(25, 56, 99);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.2);
+
+  for (const c of cols) {
+    doc.rect(cursor, y, c.w, 7, "FD");
+    doc.text(c.label, cursor + 1.4, y + 4.7, { maxWidth: c.w - 2 });
+    cursor += c.w;
+  }
+  return y + 7;
+}
+
+function drawTableRows(doc, y, x, rows, cols, pageWidth, margin) {
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.1);
+  doc.setTextColor(24, 35, 52);
+
+  let rowIndex = 0;
+  for (const r of rows) {
+    const values = cols.map((c) => String(c.value(r) ?? ""));
+    const wrapped = values.map((v, i) => doc.splitTextToSize(v, cols[i].w - 2));
+    const lines = Math.max(1, ...wrapped.map((w) => w.length));
+    const h = Math.max(6.4, lines * 3.7 + 1.4);
+
+    y = ensureSpace(doc, y, h + 1);
+    if (y <= 13.5) {
+      y = drawTableHeader(doc, y, x, cols);
+    }
+
+    if (rowIndex % 2 === 1) {
+      doc.setFillColor(250, 252, 255);
+      doc.rect(x, y, pageWidth - margin * 2, h, "F");
+    }
+
+    let cx = x;
+    for (let i = 0; i < cols.length; i++) {
+      doc.setDrawColor(222, 229, 238);
+      doc.rect(cx, y, cols[i].w, h);
+      doc.text(wrapped[i], cx + 1.1, y + 3.2, { maxWidth: cols[i].w - 2, baseline: "top" });
+      cx += cols[i].w;
+    }
+    y += h;
+    rowIndex += 1;
+  }
+  return y;
+}
+
+function addAntibiogramSection(doc, y, payload, settings) {
+  const rows = payload?.antibiogram || [];
+  const margin = 12;
+  const pageWidth = 210;
+  const x = margin;
+
+  y = ensureSpace(doc, y, 16);
+  doc.setFont("helvetica", "bold");
   doc.setFontSize(10.2);
-  doc.text(wrapped, margin + 2, y + 6);
-  doc.setTextColor(0, 0, 0);
+  doc.setTextColor(20, 40, 70);
+  doc.text("Antibiogramma MIC", x, y);
+  y += 3.5;
 
-  return y + boxH + 2;
+  const cols = [
+    { key: "antibiotic_name", label: "Antibiotico", w: 21, value: (r) => r.antibiotic_name || "-" },
+    { key: "antibiotic_class", label: "Classe", w: 17, value: (r) => r.antibiotic_class || "-" },
+    { key: "active_ingredient", label: "Principio attivo", w: 24, value: (r) => r.active_ingredient || "-" },
+    {
+      key: "commercial_names",
+      label: "N. commerciale",
+      w: 24,
+      value: (r) => settings.include_commercial_names_pdf ? csv(r.commercial_names) || "-" : "-",
+    },
+    { key: "mic", label: "MIC", w: 10, value: (r) => r.mic || "-" },
+    { key: "breakpoint_ref", label: "Breakpoint", w: 18, value: (r) => r.breakpoint_ref || "-" },
+    { key: "sir", label: "S/I/R", w: 8, value: (r) => (r.interpretation || "-") },
+    { key: "interp", label: "Interpretazione", w: 30, value: (r) => interpText(r.interpretation) },
+  ];
+
+  y = drawTableHeader(doc, y, x, cols);
+  if (!rows.length) {
+    doc.setFont("helvetica", "italic");
+    doc.text("Nessun antibiotico inserito.", x + 2, y + 5);
+    y += 8;
+    return y;
+  }
+
+  y = drawTableRows(doc, y, x, rows, cols, pageWidth, margin);
+  return y + 2;
 }
 
-function renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, margin) {
-  if (!charts?.length) return y;
+function addInterpretationSection(doc, y, interpretation, includeInterpretation, pageWidth, margin) {
+  if (!includeInterpretation || !interpretation) return y;
 
-  // Spazio di separazione sicuro con il testo precedente
-  y += 2.5;
-  y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth, settings, pageHeight);
-
-  const safeBottom = pageHeight - 20;
-  const gap = 5;
-  const titleGap = 2.6;
-  const labelH = 3.2;
-
-  const requiredMinH = charts.length === 2 ? 72 : 68;
-  const currentAvailable = safeBottom - (y + titleGap + labelH + 3);
-  if (currentAvailable < requiredMinH) {
-    doc.addPage();
-    y = drawHeader(doc, settings, pageWidth, margin) + 2;
-    y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth, settings, pageHeight);
-  }
-
-  if (charts.length === 2) {
-    const maxSideByWidth = (pageWidth - margin * 2 - gap) / 2;
-    const availableH = Math.max(18, safeBottom - (y + titleGap + labelH + 3));
-    let side = Math.min(maxSideByWidth, availableH);
-
-    side = Math.max(18, side);
-
-    const totalW = side * 2 + gap;
-    const startX = margin + (pageWidth - margin * 2 - totalW) / 2;
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9.1);
-    doc.text(charts[0].title, startX, y + labelH);
-    doc.text(charts[1].title, startX + side + gap, y + labelH);
-
-    const boxY = y + titleGap + labelH;
-    addImageFilled(doc, charts[0].image, startX, boxY, side, side);
-    addImageFilled(doc, charts[1].image, startX + side + gap, boxY, side, side);
-
-    return boxY + side + 4.5;
-  }
-
-  // Caso singolo grafico
-  const maxSideByWidth = pageWidth - margin * 2;
-  const availableH = Math.max(18, safeBottom - (y + titleGap + labelH + 3));
-  let side = Math.min(maxSideByWidth, availableH, 120);
-  side = Math.max(18, side);
-
-  const x = (pageWidth - side) / 2;
+  y = ensureSpace(doc, y, 42);
+  doc.setFillColor(247, 251, 255);
+  doc.setDrawColor(197, 214, 235);
+  doc.roundedRect(margin, y, pageWidth - margin * 2, 38, 2, 2, "FD");
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(9.3);
-  doc.text(charts[0].title, margin, y + labelH);
+  doc.setFontSize(10);
+  doc.setTextColor(19, 50, 95);
+  doc.text("Interpretazione diagnostica", margin + 3, y + 6);
 
-  const boxY = y + titleGap + labelH;
-  addImageFilled(doc, charts[0].image, x, boxY, side, side);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.8);
+  doc.setTextColor(30, 42, 58);
+  const summary = doc.splitTextToSize(interpretation.summary || "-", pageWidth - margin * 2 - 6);
+  doc.text(summary, margin + 3, y + 11);
 
-  return boxY + side + 4.5;
-}
+  let yy = y + 11 + summary.length * 3.5 + 1.5;
+  const fc = interpretation.first_choice;
+  const firstChoiceText = fc
+    ? `Prima scelta consigliata: ${fc.antibiotic_name}${(fc.commercial_names || []).length ? ` (${(fc.commercial_names || []).join(", ")})` : ""}`
+    : "Prima scelta consigliata: nessuna (assenza di antibiotici S).";
+  const line1 = doc.splitTextToSize(firstChoiceText, pageWidth - margin * 2 - 6);
+  doc.text(line1, margin + 3, yy);
+  yy += line1.length * 3.5 + 1;
 
-function addFooterOnAllPages(doc, margin) {
-  const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p++) {
-    doc.setPage(p);
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const pageWidth = doc.internal.pageSize.getWidth();
-
-    doc.setDrawColor(190);
-    doc.line(margin, pageHeight - 13, pageWidth - margin, pageHeight - 13);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    doc.setTextColor(100);
-    doc.text(`Generato il ${nowIT()} • CurvaLab WebApp`, margin, pageHeight - 8);
-    doc.text(`Pagina ${p}/${pageCount}`, pageWidth - margin, pageHeight - 8, { align: "right" });
-    doc.setTextColor(0, 0, 0);
+  const patterns = (interpretation.resistance_patterns || []).join(" • ");
+  if (patterns) {
+    const patt = doc.splitTextToSize(`Pattern di resistenza: ${patterns}`, pageWidth - margin * 2 - 6);
+    doc.text(patt, margin + 3, yy);
   }
+
+  return y + 40;
 }
 
-function shouldShowInsulinInReport(payload) {
-  return !!(
-    payload?.include_insulin === true || payload?.curve_mode === "combined"
+function addFooterNotes(doc, y, payload, interpretation, pageWidth, margin) {
+  y = ensureSpace(doc, y, 28);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.6);
+  doc.setTextColor(34, 48, 68);
+
+  const methodology = safe(payload?.methodology) || "n/d";
+  const methodLines = doc.splitTextToSize(`Metodica analitica: ${methodology}`, pageWidth - margin * 2);
+  doc.text(methodLines, margin, y);
+  y += methodLines.length * 3.6 + 1.6;
+
+  const notes = safe(payload?.notes);
+  if (notes) {
+    const noteLines = doc.splitTextToSize(`Note: ${notes}`, pageWidth - margin * 2);
+    doc.text(noteLines, margin, y);
+    y += noteLines.length * 3.6 + 1.6;
+  }
+
+  const warns = interpretation?.warnings || [];
+  if (warns.length) {
+    const warnLines = doc.splitTextToSize(`Avvertenze: ${warns.join(" • ")}`, pageWidth - margin * 2);
+    doc.text(warnLines, margin, y);
+    y += warnLines.length * 3.6 + 1.6;
+  }
+
+  y = ensureSpace(doc, y, 14);
+  doc.setTextColor(90, 102, 118);
+  doc.setFontSize(8);
+  doc.text(
+    "Referto generato automaticamente. Validazione clinica e terapeutica a cura del medico responsabile.",
+    margin,
+    y
   );
-}
+  doc.text(`Data stampa: ${new Date().toLocaleString("it-IT")}`, 210 - margin, y, { align: "right" });
 
-function chartImagesForReport(payload, settings) {
-  const merge = !!settings.merge_charts_pdf;
-  const hasIns = shouldShowInsulinInReport(payload);
-
-  const g = $("glycChart");
-  const i = $("insChart");
-  const c = $("combinedChart");
-
-  const out = [];
-
-  if (merge && hasIns && c) {
-    const img = canvasToImage(c, { square: true, squareSize: 1200 });
-    if (img) out.push({ title: "Grafico combinato glicemia + insulina", image: img });
-    return out;
-  }
-
-  if (g) {
-    const img = canvasToImage(g, { square: true, squareSize: 1200 });
-    if (img) out.push({ title: "Curva glicemica", image: img });
-  }
-
-  if (hasIns && i) {
-    const img = canvasToImage(i, { square: true, squareSize: 1200 });
-    if (img) out.push({ title: "Curva insulinemica", image: img });
-  }
-
-  return out;
+  return y;
 }
 
 function generatePdf() {
   if (!state.selectedPatient) {
-    alert("Seleziona un paziente prima di generare il PDF.");
+    alert("Seleziona un paziente.");
     return;
   }
   if (!state.lastPayload) {
-    alert("Mancano i dati dell'esame: fai prima 'Calcola interpretazione' o apri un esame salvato.");
+    alert("Calcola prima la preview o salva un esame.");
     return;
   }
-  if (!state.interpretation) {
-    alert("Manca l'interpretazione. Calcola prima i risultati.");
-    return;
-  }
-
-  const payload = state.lastPayload;
-  const settings = normalizeSettings({ ...state.reportSettings, ...getFormSettings() });
-  state.reportSettings = settings;
-
-  const meth = parseMethodologyField(payload);
-
-  const glycRows = buildRows(payload.glyc_times, payload.glyc_values, payload.glyc_refs);
-  const insRows = buildRows(payload.ins_times, payload.ins_values, payload.ins_refs);
 
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF("p", "mm", "a4");
+  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
 
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
+  const pageWidth = 210;
   const margin = 12;
+
+  const settings = { ...FALLBACK_REPORT_SETTINGS, ...(state.reportSettings || {}), ...readCurrentReportSettingsFromUI() };
+  const payload = state.lastPayload;
+  const interpretation = state.interpretation || null;
+
   let y = drawHeader(doc, settings, pageWidth, margin);
+  y = ensureSpace(doc, y, 40);
+  y = drawPatientBox(doc, y, pageWidth, margin, payload, state.selectedPatient);
+  y = addAntibiogramSection(doc, y + 2, payload, settings);
+  y = addInterpretationSection(doc, y + 1, interpretation, settings.include_interpretation_pdf, pageWidth, margin);
+  addFooterNotes(doc, y + 3, payload, interpretation, pageWidth, margin);
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
-  doc.setTextColor(20, 98, 61);
-  doc.text(settings.report_title || DEFAULT_REPORT_SETTINGS.report_title, pageWidth / 2, y, { align: "center" });
-  doc.setTextColor(0, 0, 0);
-  y += 8;
-
-  y = drawSectionTitle(doc, "Dati paziente", y, margin, pageWidth, settings, pageHeight);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-
+  const datePart = payload.exam_date ? String(payload.exam_date).replaceAll("-", "") : new Date().toISOString().slice(0, 10).replaceAll("-", "");
   const p = state.selectedPatient;
-  const left = [
-    `Cognome e nome: ${p.surname || ""} ${p.name || ""}`,
-    `Data di nascita: ${fmtDateIT(p.birth_date) || "-"}`,
-    `Sesso: ${p.sex || "-"}`,
-  ];
-  const right = [
-    `Codice fiscale: ${p.fiscal_code || "-"}`,
-    `N° accettazione: ${payload.acceptance_number || "-"}`,
-    `Data esame: ${fmtDateIT(payload.exam_date) || "-"}`,
-  ];
-
-  left.forEach((line, idx) => doc.text(line, margin, y + idx * 5.2));
-  right.forEach((line, idx) => doc.text(line, margin + 95, y + idx * 5.2));
-  y += 18;
-
-  const hasIns = shouldShowInsulinInReport(payload);
-  const showG = Array.isArray(payload.glyc_times) && payload.glyc_times.length > 0;
-  const showI = hasIns && Array.isArray(payload.ins_times) && payload.ins_times.length > 0;
-
-  y = ensureSpace(doc, y, 20, settings, pageWidth, pageHeight, margin);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10.5);
-  doc.text("Dati tecnici esame", margin, y);
-  y += 5.5;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9.5);
-  doc.text(`Tipo curva: ${showI ? "Glicemica + Insulinemica" : "Glicemica"}`, margin, y);
-  doc.text(`Carico glucosio: ${payload.glucose_load_g || 75} g`, margin + 70, y);
-  doc.text(`Modalità gravidanza: ${payload.pregnant_mode ? "SÌ" : "NO"}`, margin + 125, y);
-  y += 8;
-
-  if (settings.include_interpretation_pdf) {
-    y = drawStatusBadge(
-      doc,
-      y,
-      state.interpretation?.overall_status || "normal",
-      state.interpretation?.summary || "",
-      margin,
-      settings,
-      pageWidth,
-      pageHeight
-    );
-  }
-
-  y = drawSectionTitle(doc, "Risultati analitici", y, margin, pageWidth, settings, pageHeight);
-
-  if (showG) {
-    y = drawMiniTable(
-      doc,
-      y,
-      "Curva glicemica",
-      payload.glyc_unit || "mg/dL",
-      glycRows,
-      meth.glyc || "",
-      settings,
-      pageWidth,
-      pageHeight,
-      margin
-    );
-  }
-
-  if (showI) {
-    y = drawMiniTable(
-      doc,
-      y,
-      "Curva insulinemica",
-      payload.ins_unit || "µUI/mL",
-      insRows,
-      meth.ins || "",
-      settings,
-      pageWidth,
-      pageHeight,
-      margin
-    );
-  }
-
-  const charts = chartImagesForReport(payload, settings);
-  if (charts.length) {
-    y = renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, margin);
-  }
-
-  if (settings.include_interpretation_pdf) {
-    y = drawSectionTitle(doc, "Interpretazione", y, margin, pageWidth, settings, pageHeight);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9.8);
-
-    const details = state.interpretation?.details || {};
-    const chunks = [
-      state.interpretation?.summary || "",
-      details.glycemic_interpretation ? `Glicemia: ${details.glycemic_interpretation}` : "",
-      showI && details.insulin_interpretation ? `Insulina: ${details.insulin_interpretation}` : "",
-    ].filter(Boolean);
-
-    for (const ch of chunks) {
-      const wrapped = doc.splitTextToSize(ch, pageWidth - margin * 2);
-      y = ensureSpace(doc, y, wrapped.length * 4.3 + 2, settings, pageWidth, pageHeight, margin);
-      doc.text(wrapped, margin, y + 4);
-      y += wrapped.length * 4.3 + 1;
-    }
-  }
-
-  if (payload.notes) {
-    y = drawSectionTitle(doc, "Note", y, margin, pageWidth, settings, pageHeight);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9.8);
-    const wrapped = doc.splitTextToSize(payload.notes, pageWidth - margin * 2);
-    y = ensureSpace(doc, y, wrapped.length * 4.2 + 2, settings, pageWidth, pageHeight, margin);
-    doc.text(wrapped, margin, y + 4);
-    y += wrapped.length * 4.2 + 1;
-  }
-
-  const sourceName = state.refs?.metadata?.source_name || state.refs?.metadata?.dataset_name || "";
-  const sourceVersion = state.refs?.metadata?.dataset_version || state.refs?.metadata?.version || "";
-  if (sourceName || sourceVersion) {
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(8.5);
-    doc.setTextColor(90);
-    const txt = `Valori di riferimento: ${[sourceName, sourceVersion].filter(Boolean).join(" • ")}`;
-    const wrapped = doc.splitTextToSize(txt, pageWidth - margin * 2);
-    const blockH = wrapped.length * 4.2 + 2;
-    y = ensureSpace(doc, y, blockH + 1, settings, pageWidth, pageHeight, margin);
-    doc.text(wrapped, margin, y + 4);
-    doc.setTextColor(0, 0, 0);
-    y += blockH;
-  }
-
-  addFooterOnAllPages(doc, margin);
-
-  const surname = (p.surname || "paziente").replace(/[^a-z0-9_-]/gi, "_");
-  const name = (p.name || "").replace(/[^a-z0-9_-]/gi, "_");
-  const fileName = `Referto_Curva_${surname}_${name}_${payload.exam_date || ""}.pdf`;
+  const fileName = `Referto_MIC_${safe(p?.surname) || "Paziente"}_${safe(p?.name) || ""}_${datePart}.pdf`;
   doc.save(fileName);
 }
 
-function bindLogoUpload() {
-  const fileInput = $("header_logo_file");
-  if (!fileInput) return;
+export async function bindReportUI() {
+  try {
+    const saved = await api.getReportSettings();
+    state.reportSettings = { ...FALLBACK_REPORT_SETTINGS, ...(saved || {}) };
+    applyReportSettingsToUI(state.reportSettings);
+  } catch (e) {
+    state.reportSettings = { ...FALLBACK_REPORT_SETTINGS };
+    applyReportSettingsToUI(state.reportSettings);
+  }
 
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files?.[0];
+  $("btnSaveReportSettings").addEventListener("click", async () => {
+    const status = $("reportSettingsStatus");
+    status.textContent = "Salvataggio...";
+    status.className = "muted";
+    try {
+      const payload = readCurrentReportSettingsFromUI();
+      payload.header_logo_data_url = state.reportSettings?.header_logo_data_url || null;
+      const saved = await api.saveReportSettings(payload);
+      state.reportSettings = { ...FALLBACK_REPORT_SETTINGS, ...saved };
+      status.textContent = "Impostazioni salvate.";
+      status.className = "status-ok";
+    } catch (e) {
+      status.textContent = "Errore salvataggio: " + e.message;
+      status.className = "status-err";
+    }
+  });
+
+  $("header_logo_file").addEventListener("change", async (ev) => {
+    const file = ev.target.files?.[0];
     if (!file) return;
-
     if (!file.type.startsWith("image/")) {
       alert("Seleziona un file immagine valido.");
-      fileInput.value = "";
+      ev.target.value = "";
       return;
     }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = typeof reader.result === "string" ? reader.result : null;
-      state.reportSettings = normalizeSettings({ ...state.reportSettings, header_logo_data_url: dataUrl });
-      setLogoPreview(dataUrl);
-      setStatus("Logo caricato. Salva le impostazioni per renderlo predefinito.", true);
-    };
-    reader.onerror = () => {
-      setStatus("Errore lettura logo.", false);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await readFileAsDataURL(file);
+      state.reportSettings = state.reportSettings || { ...FALLBACK_REPORT_SETTINGS };
+      state.reportSettings.header_logo_data_url = dataUrl;
+      renderLogoPreview(dataUrl);
+    } catch (e) {
+      alert("Impossibile leggere il logo.");
+    } finally {
+      ev.target.value = "";
+    }
   });
 
-  $("btnRemoveLogo")?.addEventListener("click", () => {
-    state.reportSettings = normalizeSettings({ ...state.reportSettings, header_logo_data_url: null });
-    if (fileInput) fileInput.value = "";
-    setLogoPreview(null);
-    setStatus("Logo rimosso. Salva le impostazioni per confermare.", true);
+  $("btnRemoveLogo").addEventListener("click", () => {
+    state.reportSettings = state.reportSettings || { ...FALLBACK_REPORT_SETTINGS };
+    state.reportSettings.header_logo_data_url = null;
+    renderLogoPreview(null);
   });
-}
 
-export function bindReportUI() {
-  $("btnPdf")?.addEventListener("click", generatePdf);
-  $("btnSaveReportSettings")?.addEventListener("click", saveReportSettings);
-  bindLogoUpload();
-  loadReportSettings();
+  $("btnPdf").addEventListener("click", generatePdf);
 }

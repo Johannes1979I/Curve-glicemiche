@@ -1,14 +1,15 @@
 services:
   - type: web
-    name: curvelab-api
-    env: docker
+    name: microlab-mic-api
+    env: python
     plan: free
-    autoDeploy: true
-    healthCheckPath: /api/health
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ENV
         value: production
       - key: DATABASE_URL
-        value: sqlite:///./curve_lab.db
+        value: sqlite:///./micro_lab.db
       - key: CORS_ORIGINS
         value: "*"

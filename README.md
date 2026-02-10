@@ -1,120 +1,59 @@
-# CurveLab WebApp (GitHub-ready)
+# MicroLab MIC WebApp (GitHub-ready)
 
-Web app modulare per curve glicemiche/insulinemiche con archivio pazienti.
+Web app modulare per **refertazione microbiologica con antibiogramma MIC**.
 
-## Cosa fa questa versione
+## Cosa include
 
-Hai **due modalità operative** nello stesso progetto:
-
-1. **GitHub Pages (solo repo GitHub) — subito funzionante**
-   - Il frontend gira da `docs/`
-   - Archivio pazienti/esami salvato nel browser (DB locale via LocalStorage)
-   - Non richiede server esterno
-
-2. **Frontend + Backend + DB centralizzato**
-   - Frontend su GitHub Pages
-   - Backend FastAPI (`backend/`) con DB SQLite/PostgreSQL
-   - Più PC condividono gli stessi pazienti/esami
-
----
+- Archivio pazienti (CRUD)
+- Gestione esame microbiologico:
+  - tipo campione (urine, feci, orofaringeo, ecc.)
+  - microrganismo isolato
+  - tabella antibiogramma con MIC + S/I/R + classe + breakpoint
+- Catalogo antibiotici (aggiunta/rimozione)
+- Interpretazione automatica:
+  - separazione Sensibili / Intermedi / Resistenti
+  - ranking consigliati = antibiotici **S** (priorità stewardship + MIC)
+  - prima scelta suggerita
+  - pattern di resistenza evidenziati
+  - nomi commerciali opzionali
+- Referto PDF professionale con intestazione configurabile e salvataggio impostazioni default
+- Doppia modalità runtime:
+  - **Backend + DB SQLite** (FastAPI)
+  - **Solo frontend GitHub Pages** con archivio locale browser (localStorage)
 
 ## Struttura progetto
 
-```text
-curve-lab-webapp/
-├─ docs/                      # versione pronta per GitHub Pages
-│  ├─ index.html
-│  └─ assets/
-├─ frontend/                  # stessa UI usata dal backend locale
-├─ backend/
-│  ├─ app/
-│  │  ├─ main.py
-│  │  ├─ config.py
-│  │  ├─ models.py
-│  │  ├─ schemas.py
-│  │  ├─ routers/
-│  │  ├─ crud/
-│  │  └─ services/
-│  └─ requirements.txt
-├─ .github/workflows/pages.yml
-├─ .env.example
-├─ Dockerfile
-├─ docker-compose.yml
-└─ render.yaml
-```
+- `backend/` API FastAPI + SQLAlchemy
+- `frontend/` UI principale
+- `docs/` copia statica per GitHub Pages
+- `.github/workflows/pages.yml` deploy automatico Pages
 
----
+## Avvio locale (completo con DB)
 
-## Pubblicazione su GitHub Pages (funziona subito)
-
-### Opzione A (consigliata): con workflow già incluso
-1. Carica il repo su GitHub
-2. Vai in **Settings → Pages**
-3. In **Source** seleziona **GitHub Actions**
-4. Fai commit/push su `main`
-5. Attendi il job `Deploy GitHub Pages`
-6. Apri il link Pages (`https://<utente>.github.io/<repo>/`)
-
-### Opzione B: Deploy from branch
-1. Settings → Pages
-2. Source: **Deploy from a branch**
-3. Branch: `main`
-4. Folder: `/docs`
-5. Save
-
----
-
-## Modalità backend centralizzato (multi-PC)
-
-### 1) Avvio locale backend
 ```bash
 cd backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
+# Linux/Mac: source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 
-App: `http://localhost:8000`  
-Swagger: `http://localhost:8000/docs`
+Apri: `http://localhost:8000`
 
-### 2) Collegare frontend GitHub Pages al backend
-Nel file `docs/assets/js/config.js` imposta:
+## Uso su GitHub Pages (solo frontend)
 
-```js
-window.APP_CONFIG = {
-  API_BASE_URL: "https://TUO-BACKEND/api",
-  FORCE_LOCAL_DB: false
-};
-```
+1. Pubblica repo su GitHub.
+2. Verifica che in `docs/` ci siano `index.html` + `assets/`.
+3. Settings → Pages:
+   - Source: Deploy from a branch
+   - Branch: `main`
+   - Folder: `/docs`
+4. Salva.
 
-Se `API_BASE_URL` è vuoto, su GitHub Pages userà automaticamente il DB locale browser.
+L'app funziona in modalità locale browser, senza backend.
 
----
+## Note cliniche importanti
 
-## API principali backend
-
-- `GET /api/health`
-- `GET /api/presets`
-- Pazienti:
-  - `POST /api/patients`
-  - `GET /api/patients`
-  - `PUT /api/patients/{id}`
-  - `DELETE /api/patients/{id}`
-- Esami:
-  - `POST /api/exams/preview`
-  - `POST /api/exams`
-  - `GET /api/exams?patient_id=...`
-  - `GET /api/exams/{id}`
-  - `DELETE /api/exams/{id}`
-
----
-
-## Nota importante
-
-GitHub Pages **non esegue backend Python/PHP**.  
-Per questo il progetto include:
-- modalità locale browser (funziona solo con GitHub),
-- modalità API+DB centralizzato (richiede deploy backend esterno).
-
+I pannelli antibiotici predefiniti sono orientativi e **devono essere validati** da microbiologo/infettivologo locale.
+La prescrizione finale non è automatica: richiede integrazione con quadro clinico, allergie, funzione renale, gravidanza e linee guida locali.

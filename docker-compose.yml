@@ -1,13 +1,9 @@
 services:
-  curvelab:
+  microlab:
     build: .
-    container_name: curvelab_app
+    container_name: microlab_webapp
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app/backend
       - ./frontend:/app/frontend
-      - ./backend/curve_lab.db:/app/backend/curve_lab.db
-    environment:
-      - DATABASE_URL=sqlite:///./curve_lab.db
-      - CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000

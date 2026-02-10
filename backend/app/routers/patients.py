@@ -44,3 +44,4 @@ def delete_patient(patient_id: int, db: Session = Depends(get_db)):
     if not p:
         raise HTTPException(status_code=404, detail="Paziente non trovato")
     crud.delete_patient(db, p)
+    return None

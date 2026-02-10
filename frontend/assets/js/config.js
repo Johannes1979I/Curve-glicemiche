@@ -9,5 +9,5 @@
  */
 window.APP_CONFIG = window.APP_CONFIG || {
   API_BASE_URL: "",
-  FORCE_LOCAL_DB: true,
+  FORCE_LOCAL_DB: false,
 };

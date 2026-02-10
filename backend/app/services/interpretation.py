@@ -1,169 +1,126 @@
-from typing import Dict, List, Tuple, Any
+from __future__ import annotations
+from typing import Dict, Any, List
 
 
-def _to_float(value: Any) -> float | None:
-    """Converte in float gestendo None/stringhe vuote/virgola decimale."""
-    if value is None:
+def _norm_interp(v: str | None) -> str:
+    s = (v or "").strip().upper()
+    if s in {"S", "SUSCETTIBILE", "SENSITIVE"}:
+        return "S"
+    if s in {"I", "INTERMEDIO", "INCREASED EXPOSURE"}:
+        return "I"
+    if s in {"R", "RESISTENTE", "RESISTANT"}:
+        return "R"
+    return "-"
+
+
+def _parse_mic(v: str | None) -> float | None:
+    if not v:
         return None
-    if isinstance(value, str):
-        s = value.strip().replace(",", ".")
-        if s == "":
-            return None
-        try:
-            return float(s)
-        except ValueError:
-            return None
+    s = str(v).replace(",", ".")
+    cleaned = "".join(ch for ch in s if ch.isdigit() or ch == ".")
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        return float(cleaned)
+    except Exception:
         return None
 
 
-def evaluate_series(
-    times: List[int],
-    values: List[float],
-    refs: Dict[str, Dict[str, float]],
-) -> Tuple[List[Dict[str, Any]], str]:
-    """
-    Valuta una serie rispetto ai range di riferimento.
-    - I valori mancanti/non numerici NON generano warning.
-    """
-    rows: List[Dict[str, Any]] = []
-    severity = "normal"
+AWARE_PRIORITY = {"Access": 0, "Watch": 1, "Reserve": 2, "Other": 3, None: 4, "": 4}
 
-    for idx, t in enumerate(times):
-        raw_v = values[idx] if idx < len(values) else None
-        v = _to_float(raw_v)
 
-        ref = refs.get(str(t)) or refs.get(t) or {"min": 0, "max": 0}
-        rmin = _to_float(ref.get("min")) if isinstance(ref, dict) else None
-        rmax = _to_float(ref.get("max")) if isinstance(ref, dict) else None
-        rmin = rmin if rmin is not None else 0.0
-        rmax = rmax if rmax is not None else 0.0
+def _fmt_names(names: List[str]) -> str:
+    names = [str(x).strip() for x in (names or []) if str(x).strip()]
+    return ", ".join(names)
 
-        if v is None:
-            status = "missing"
-        elif v < rmin:
-            status = "low"
-            if severity == "normal":
-                severity = "warning"
-        elif v > rmax:
-            status = "high"
-            if severity in ("normal", "warning"):
-                severity = "danger"
-        else:
-            status = "normal"
 
-        rows.append(
-            {
-                "time": t,
-                "value": v,
-                "ref": {"min": rmin, "max": rmax},
-                "status": status,
-            }
-        )
+def _resistance_patterns(specimen: str, resistant: List[dict]) -> List[str]:
+    names = [str(x.get("antibiotic_name") or "").lower() for x in resistant]
+    patterns: List[str] = []
 
-    return rows, severity
+    has_fq = any(("cipro" in n) or ("levoflox" in n) for n in names)
+    has_ceph3 = any(("ceftriax" in n) or ("cefotax" in n) or ("ceftaz" in n) for n in names)
+    has_carb = any(("meropen" in n) or ("imipenem" in n) or ("ertapen" in n) for n in names)
+
+    if len(resistant) >= 3:
+        patterns.append("Multi-resistenza (MDR) sospetta: almeno 3 antibiotici classificati R.")
+    if has_fq and has_ceph3:
+        patterns.append("Pattern compatibile con possibile ESBL: resistenza a fluorochinoloni e cefalosporine di III generazione.")
+    if has_carb:
+        patterns.append("Attenzione: resistenza ai carbapenemi nel pannello testato.")
+    if specimen == "feci" and len(resistant) >= 2:
+        patterns.append("Nelle infezioni enteriche valutare terapia antibiotica solo se clinicamente indicata.")
+
+    return patterns
 
 
 def interpret_exam(payload: Dict[str, Any]) -> Dict[str, Any]:
-    glyc_times = payload.get("glyc_times", []) or []
-    glyc_values = payload.get("glyc_values", []) or []
-    glyc_refs = payload.get("glyc_refs", {}) or {}
+    specimen = str(payload.get("specimen_type") or "").lower()
+    growth = str(payload.get("growth_result") or "positive").lower()
+    organism = (payload.get("microorganism") or "").strip()
+    entries = payload.get("antibiogram") or []
 
-    # Insulina attiva solo se esplicitamente richiesta (flag) o modalità combinata
-    include_insulin = bool(payload.get("include_insulin")) or payload.get("curve_mode") == "combined"
+    normalized = []
+    for e in entries:
+        row = dict(e)
+        row["interpretation"] = _norm_interp(row.get("interpretation"))
+        row["commercial_names"] = row.get("commercial_names") or []
+        row["mic_numeric"] = _parse_mic(row.get("mic"))
+        normalized.append(row)
 
-    ins_times = payload.get("ins_times", []) if include_insulin else []
-    ins_values = payload.get("ins_values", []) if include_insulin else []
-    ins_refs = payload.get("ins_refs", {}) if include_insulin else {}
+    sensitive = [e for e in normalized if e.get("interpretation") == "S"]
+    intermediate = [e for e in normalized if e.get("interpretation") == "I"]
+    resistant = [e for e in normalized if e.get("interpretation") == "R"]
 
-    pregnant = bool(payload.get("pregnant_mode", False))
+    # Stewardship: Access -> Watch -> Reserve, poi MIC crescente, poi alfabetico
+    recommended = sorted(
+        sensitive,
+        key=lambda x: (
+            AWARE_PRIORITY.get(x.get("aware_group"), 4),
+            x.get("mic_numeric") if x.get("mic_numeric") is not None else 999999.0,
+            str(x.get("antibiotic_name", "")).lower(),
+        ),
+    )
+    first_choice = recommended[0] if recommended else None
 
-    glyc_rows, glyc_sev = evaluate_series(glyc_times, glyc_values, glyc_refs)
-    if include_insulin:
-        ins_rows, ins_sev = evaluate_series(ins_times, ins_values, ins_refs)
+    warnings: List[str] = []
+    if growth == "negative":
+        summary = "Nessuna crescita significativa nel campione inviato."
     else:
-        ins_rows, ins_sev = [], "normal"
-
-    overall = "normal"
-    for sev in (glyc_sev, ins_sev):
-        if sev == "danger":
-            overall = "danger"
-            break
-        if sev == "warning" and overall == "normal":
-            overall = "warning"
-
-    def pick_gly(t: int) -> float | None:
-        if t not in glyc_times:
-            return None
-        idx = glyc_times.index(t)
-        raw = glyc_values[idx] if idx < len(glyc_values) else None
-        return _to_float(raw)
-
-    gly_diag = None
-    v120 = pick_gly(120)
-    if v120 is not None:
-        if pregnant:
-            v0 = pick_gly(0)
-            v60 = pick_gly(60)
-            gdm = (v0 is not None and v0 >= 92) or (v60 is not None and v60 >= 180) or (v120 >= 153)
-
-            if gdm:
-                gly_diag = "Criteri IADPSG compatibili con diabete gestazionale (almeno un valore sopra soglia)."
-                if overall != "danger":
-                    overall = "danger"
-            else:
-                gly_diag = "Criteri IADPSG nei limiti."
+        target = organism if organism else "microrganismo isolato"
+        if recommended:
+            rec_short = []
+            for r in recommended[:6]:
+                comm = _fmt_names(r.get("commercial_names") or [])
+                if comm:
+                    rec_short.append(f"{r.get('antibiotic_name')} (esempi: {comm})")
+                else:
+                    rec_short.append(str(r.get("antibiotic_name")))
+            summary = (
+                f"{target}: antibiotici risultati sensibili nel pannello testato -> "
+                + "; ".join(rec_short)
+                + "."
+            )
         else:
-            if v120 < 140:
-                gly_diag = "Tolleranza glucidica normale."
-            elif v120 < 200:
-                gly_diag = "Ridotta tolleranza al glucosio (IGT)."
-                if overall == "normal":
-                    overall = "warning"
-            else:
-                gly_diag = "Valore suggestivo di diabete mellito (da confermare clinicamente)."
-                overall = "danger"
+            summary = (
+                f"{target}: nessun antibiotico classificato come sensibile (S) nel pannello inserito. "
+                "Valutare consulto infettivologico e ulteriore AST."
+            )
 
-    ins_diag = None
-    if include_insulin and ins_times and ins_values:
-        normalized = [_to_float(v) for v in ins_values]
-        numeric_pairs = [(i, v) for i, v in enumerate(normalized) if v is not None]
-
-        if numeric_pairs:
-            peak_idx, peak_val = max(numeric_pairs, key=lambda x: x[1])
-            peak_time = ins_times[peak_idx] if peak_idx < len(ins_times) else None
-
-            v0 = normalized[0] if len(normalized) > 0 else None
-            idx120 = ins_times.index(120) if 120 in ins_times else -1
-            v120_ins = normalized[idx120] if idx120 >= 0 and idx120 < len(normalized) else None
-
-            if peak_time is not None:
-                if peak_time <= 60 and (v120_ins is None or v0 is None or v120_ins <= v0 * 3):
-                    ins_diag = "Pattern insulinemico nel range atteso."
-                elif peak_time > 60:
-                    ins_diag = f"Picco insulinemico ritardato (picco a {peak_time}'). Possibile insulino-resistenza."
-                    if overall == "normal":
-                        overall = "warning"
-                elif v120_ins is not None and v0 is not None and v120_ins > v0 * 3:
-                    ins_diag = "Ritorno lento verso il basale a 120'."
-                    if overall == "normal":
-                        overall = "warning"
-
-    summary_map = {
-        "normal": "Referto complessivamente nei limiti di riferimento.",
-        "warning": "Referto con alterazioni da correlare clinicamente.",
-        "danger": "Referto con alterazioni: necessaria valutazione medica.",
-    }
+    if specimen == "feci":
+        warnings.append(
+            "Nei quadri enterici molte infezioni sono autolimitanti: l'antibiotico si valuta solo se clinicamente indicato."
+        )
+    if growth != "negative":
+        warnings.append(
+            "La scelta terapeutica finale deve considerare sede infezione, dosaggio, allergie, gravidanza, funzione renale ed epidemiologia locale."
+        )
 
     return {
-        "overall_status": overall,
-        "summary": summary_map[overall],
-        "details": {
-            "glycemic_rows": glyc_rows,
-            "insulin_rows": ins_rows,
-            "glycemic_interpretation": gly_diag,
-            "insulin_interpretation": ins_diag if include_insulin else None,
-        },
+        "sensitive": sensitive,
+        "intermediate": intermediate,
+        "resistant": resistant,
+        "recommended": recommended,
+        "first_choice": first_choice,
+        "resistance_patterns": _resistance_patterns(specimen, resistant),
+        "summary": summary,
+        "warnings": warnings,
     }
