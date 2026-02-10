@@ -609,7 +609,7 @@ function chartImagesForReport(payload, settings) {
   return out;
 }
 
-function generatePdf() {
+export function generatePdf() {
   if (!state.selectedPatient) {
     alert("Seleziona un paziente prima di generare il PDF.");
     return;
