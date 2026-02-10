@@ -575,11 +575,9 @@ function addFooterOnAllPages(doc, margin) {
 }
 
 function shouldShowInsulinInReport(payload) {
-  if (!payload || typeof payload !== "object") return false;
-  if (Object.prototype.hasOwnProperty.call(payload, "include_insulin")) {
-    return payload.include_insulin === true;
-  }
-  return payload.curve_mode === "combined";
+  return !!(
+    payload?.include_insulin === true || payload?.curve_mode === "combined"
+  );
 }
 
 function chartImagesForReport(payload, settings) {

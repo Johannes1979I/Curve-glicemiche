@@ -72,11 +72,7 @@ def interpret_exam(payload: Dict[str, Any]) -> Dict[str, Any]:
     glyc_refs = payload.get("glyc_refs", {}) or {}
 
     # Insulina attiva solo se esplicitamente richiesta (flag) o modalità combinata
-    # Se include_insulin è presente nel payload, ha priorità assoluta.
-    if "include_insulin" in payload:
-        include_insulin = bool(payload.get("include_insulin"))
-    else:
-        include_insulin = payload.get("curve_mode") == "combined"
+    include_insulin = bool(payload.get("include_insulin")) or payload.get("curve_mode") == "combined"
 
     ins_times = payload.get("ins_times", []) if include_insulin else []
     ins_values = payload.get("ins_values", []) if include_insulin else []
