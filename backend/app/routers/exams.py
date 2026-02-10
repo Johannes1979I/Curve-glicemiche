@@ -1,7 +1,6 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-
 from ..database import get_db
 from .. import schemas
 from ..crud import exams as crud_exams
@@ -14,30 +13,35 @@ router = APIRouter(prefix="/exams", tags=["exams"])
 
 def _row_to_out(row):
     interpretation = json.loads(row.interpretation_details_json or "{}")
-    payload = {
-        "id": row.id,
-        "patient_id": row.patient_id,
-        "exam_date": row.exam_date,
-        "acceptance_number": row.acceptance_number,
-        "requester_doctor": row.requester_doctor,
-        "specimen_type": row.specimen_type,
-        "growth_result": row.growth_result,
-        "microorganism": row.microorganism,
-        "methodology": row.methodology,
-        "notes": row.notes,
-        "antibiogram": json.loads(row.antibiogram_json or "[]"),
-        "interpretation_summary": row.interpretation_summary,
-        "interpretation": interpretation,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-    }
-    return schemas.ExamOut(**payload)
+    return schemas.ExamOut(
+        id=row.id,
+        patient_id=row.patient_id,
+        exam_date=row.exam_date,
+        requester_doctor=row.requester_doctor,
+        acceptance_number=row.acceptance_number,
+        curve_mode=row.curve_mode,
+        pregnant_mode=bool(row.pregnant_mode),
+        glucose_load_g=row.glucose_load_g,
+        glyc_unit=row.glyc_unit,
+        ins_unit=row.ins_unit,
+        glyc_times=json.loads(row.glyc_times_json or "[]"),
+        ins_times=json.loads(row.ins_times_json or "[]"),
+        glyc_values=json.loads(row.glyc_values_json or "[]"),
+        ins_values=json.loads(row.ins_values_json or "[]"),
+        glyc_refs=json.loads(row.glyc_refs_json or "{}"),
+        ins_refs=json.loads(row.ins_refs_json or "{}"),
+        methodology=row.methodology,
+        notes=row.notes,
+        interpretation_summary=row.interpretation_summary,
+        interpretation=schemas.InterpretationOut(**interpretation),
+        created_at=row.created_at,
+    )
 
 
 @router.post("/preview", response_model=schemas.InterpretationOut)
-def preview_exam(payload: schemas.ExamPayload):
-    interpretation = interpret_exam(payload.model_dump())
-    return schemas.InterpretationOut(**interpretation)
+def preview_interpretation(payload: schemas.ExamPayload):
+    interp = interpret_exam(payload.model_dump())
+    return schemas.InterpretationOut(**interp)
 
 
 @router.post("", response_model=schemas.ExamOut, status_code=201)
@@ -46,19 +50,19 @@ def create_exam(payload: schemas.ExamCreate, db: Session = Depends(get_db)):
     if not patient:
         raise HTTPException(status_code=404, detail="Paziente non trovato")
 
-    interpretation = interpret_exam(payload.model_dump())
-    row = crud_exams.create_exam(db, payload, interpretation)
-    return _row_to_out(row)
+    interp = interpret_exam(payload.model_dump())
+    created = crud_exams.create_exam(db, payload, interp)
+    return _row_to_out(created)
 
 
-@router.get("", response_model=list[schemas.ExamOut])
+@router.get("", response_model=list[schemas.ExamListItem])
 def list_exams(
     patient_id: int | None = Query(default=None),
-    limit: int = Query(default=200, ge=1, le=2000),
+    limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     rows = crud_exams.list_exams(db, patient_id=patient_id, limit=limit)
-    return [_row_to_out(r) for r in rows]
+    return rows
 
 
 @router.get("/{exam_id}", response_model=schemas.ExamOut)
@@ -75,4 +79,3 @@ def delete_exam(exam_id: int, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Esame non trovato")
     crud_exams.delete_exam(db, row)
-    return None

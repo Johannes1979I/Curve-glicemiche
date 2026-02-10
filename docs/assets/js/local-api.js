@@ -1,459 +1,529 @@
-const STORAGE_KEY = "microlab_localdb_v2";
-const REPORT_SETTINGS_KEY = "microlab_report_settings_v2";
+const STORAGE_KEY = "curvelab_localdb_v2";
+const REPORT_SETTINGS_KEY = "curvelab_report_settings_v2";
 
-const SPECIMEN_TYPES = [
-  { id: "urine", label: "Urine" },
-  { id: "feci", label: "Feci" },
-  { id: "orofaringeo", label: "Tampone orofaringeo" },
-  { id: "espettorato", label: "Espettorato" },
-  { id: "ferita", label: "Tampone ferita" },
-  { id: "sangue", label: "Emocoltura" },
-];
+const DEFAULT_GLYC_REFS = {
+  0: { min: 60, max: 100 },
+  30: { min: 110, max: 160 },
+  60: { min: 120, max: 170 },
+  90: { min: 90, max: 150 },
+  120: { min: 60, max: 140 },
+  180: { min: 60, max: 110 },
+};
 
-const DEFAULT_METHODOLOGIES = {
-  culture: "Coltura su terreni selettivi + identificazione biochimica/MALDI-TOF",
-  mic: "Determinazione MIC (broth microdilution o sistema automatizzato) interpretata secondo breakpoint EUCAST",
+const PREGNANT_GLYC_REFS = {
+  0: { min: 60, max: 92 },
+  30: { min: 100, max: 170 },
+  60: { min: 100, max: 180 },
+  90: { min: 80, max: 165 },
+  120: { min: 60, max: 153 },
+  180: { min: 60, max: 110 },
+};
+
+// Nota: per l'insulina non esiste un unico range OGTT universalmente standardizzato
+// in tutti i congressi/societa'. Questi range sono configurabili e modificabili dall'operatore.
+const DEFAULT_INS_REFS = {
+  0: { min: 2, max: 25 },
+  30: { min: 20, max: 100 },
+  60: { min: 20, max: 120 },
+  90: { min: 20, max: 100 },
+  120: { min: 6, max: 60 },
+  180: { min: 2, max: 30 },
+};
+
+const DEFAULT_METHODS = {
+  glyc: "Metodo enzimatico (Esochinasi/G6PDH) - Fotometria UV",
+  ins: "Immunodosaggio in Chemiluminescenza (CLIA)",
 };
 
 const REFERENCES_METADATA = {
-  profile_id: "micro-amr-guidelines-2026.02",
-  profile_name: "Microbiology MIC Guidance Profile",
-  dataset_name: "CDC + NICE + IDSA + EUCAST + WHO AWaRe (sintesi operativa locale)",
-  dataset_version: "2026.02",
+  profile_id: "global-endocrine-consensus-v2",
+  profile_name: "Global Endocrine Consensus DB (profilo locale)",
+  dataset_name: "Global Endocrine Guideline Profile",
+  dataset_version: "2026.02.10",
   updated_at: "2026-02-10",
   sources: [
-    "NICE NG109 (UTI)",
-    "CDC Campylobacter e advisory Shigella XDR",
-    "IDSA streptococcal pharyngitis",
-    "EUCAST breakpoint tables e definizioni S/I/R",
-    "WHO AWaRe classification",
+    "ADA Standards of Care in Diabetes—2026 (Diagnosis and Classification)",
+    "ADA Diabetes Diagnosis & Tests (criteri OGTT/FPG/A1C)",
+    "IDF Global Clinical Practice Recommendations 2025",
+    "WHO Hyperglycaemia in pregnancy guideline",
+    "IADPSG Consensus 75 g OGTT in gravidanza (92/180/153 mg/dL)",
+    "Clinical Chemistry / ADA insulin standardization: variabilità assay insulinici",
   ],
-  notes: "Pannelli predefiniti orientativi. La scelta finale va integrata con quadro clinico e linee guida locali.",
+  notes:
+    "Le soglie diagnostiche principali sono allineate alle linee guida internazionali. I punti intermedi della curva e i range insulinemici sono configurabili dal laboratorio in base al metodo analitico e alla popolazione di riferimento.",
 };
 
-const ANTI_META = {
-  "Fosfomicina": { antibiotic_class: "Fosfonati", breakpoint_ref: "EUCAST 2026" },
-  "Nitrofurantoina": { antibiotic_class: "Nitrofurani", breakpoint_ref: "EUCAST 2026" },
-  "Amoxicillina/Acido clavulanico": { antibiotic_class: "Beta-lattamici + inibitore", breakpoint_ref: "EUCAST 2026" },
-  "Trimetoprim/Sulfametossazolo": { antibiotic_class: "Folatoinibitori", breakpoint_ref: "EUCAST 2026" },
-  "Ciprofloxacina": { antibiotic_class: "Fluorochinoloni", breakpoint_ref: "EUCAST 2026" },
-  "Ceftriaxone": { antibiotic_class: "Cefalosporine III", breakpoint_ref: "EUCAST 2026" },
-  "Gentamicina": { antibiotic_class: "Aminoglicosidi", breakpoint_ref: "EUCAST 2026" },
-  "Azitromicina": { antibiotic_class: "Macrolidi", breakpoint_ref: "EUCAST 2026" },
-  "Ampicillina": { antibiotic_class: "Aminopenicilline", breakpoint_ref: "EUCAST 2026" },
-  "Penicillina V": { antibiotic_class: "Penicilline naturali", breakpoint_ref: "EUCAST 2026" },
-  "Amoxicillina": { antibiotic_class: "Aminopenicilline", breakpoint_ref: "EUCAST 2026" },
-  "Cefalexina": { antibiotic_class: "Cefalosporine I", breakpoint_ref: "EUCAST 2026" },
-  "Clindamicina": { antibiotic_class: "Lincosamidi", breakpoint_ref: "EUCAST 2026" },
-  "Claritromicina": { antibiotic_class: "Macrolidi", breakpoint_ref: "EUCAST 2026" },
-  "Levofloxacina": { antibiotic_class: "Fluorochinoloni", breakpoint_ref: "EUCAST 2026" },
-  "Piperacillina/Tazobactam": { antibiotic_class: "Ureidopenicillina + inibitore", breakpoint_ref: "EUCAST 2026" },
-  "Vancomicina": { antibiotic_class: "Glicopeptidi", breakpoint_ref: "EUCAST 2026" },
-  "Linezolid": { antibiotic_class: "Oxazolidinoni", breakpoint_ref: "EUCAST 2026" },
-  "Meropenem": { antibiotic_class: "Carbapenemi", breakpoint_ref: "EUCAST 2026" },
-};
-
-const RAW_DEFAULT_CATALOG = [
-  { antibiotic_name: "Fosfomicina", active_ingredient: "fosfomycin trometamol", specimen_types: ["urine"], commercial_names: ["Monuril", "Monurol"], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Nitrofurantoina", active_ingredient: "nitrofurantoin", specimen_types: ["urine"], commercial_names: ["Macrobid"], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Amoxicillina/Acido clavulanico", active_ingredient: "amoxicillin + clavulanic acid", specimen_types: ["urine", "orofaringeo", "espettorato"], commercial_names: ["Augmentin"], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Trimetoprim/Sulfametossazolo", active_ingredient: "trimethoprim + sulfamethoxazole", specimen_types: ["urine", "feci"], commercial_names: ["Bactrim"], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Ciprofloxacina", active_ingredient: "ciprofloxacin", specimen_types: ["urine", "feci"], commercial_names: ["Cipro", "Ciproxin"], aware_group: "Watch", enabled: true },
-  { antibiotic_name: "Ceftriaxone", active_ingredient: "ceftriaxone", specimen_types: ["urine", "feci", "sangue"], commercial_names: ["Rocephin"], aware_group: "Watch", enabled: true },
-  { antibiotic_name: "Gentamicina", active_ingredient: "gentamicin", specimen_types: ["urine", "sangue"], commercial_names: [], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Azitromicina", active_ingredient: "azithromycin", specimen_types: ["feci"], commercial_names: ["Zithromax", "Zitromax"], aware_group: "Watch", enabled: true },
-  { antibiotic_name: "Ampicillina", active_ingredient: "ampicillin", specimen_types: ["feci"], commercial_names: [], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Penicillina V", active_ingredient: "phenoxymethylpenicillin", specimen_types: ["orofaringeo"], commercial_names: [], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Amoxicillina", active_ingredient: "amoxicillin", specimen_types: ["orofaringeo"], commercial_names: ["Zimox", "Amoxil"], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Cefalexina", active_ingredient: "cephalexin", specimen_types: ["orofaringeo"], commercial_names: ["Keflex"], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Clindamicina", active_ingredient: "clindamycin", specimen_types: ["orofaringeo"], commercial_names: ["Dalacin C"], aware_group: "Access", enabled: true },
-  { antibiotic_name: "Claritromicina", active_ingredient: "clarithromycin", specimen_types: ["orofaringeo"], commercial_names: ["Klacid", "Biaxin"], aware_group: "Watch", enabled: true },
-  { antibiotic_name: "Levofloxacina", active_ingredient: "levofloxacin", specimen_types: ["espettorato"], commercial_names: ["Tavanic", "Levaquin"], aware_group: "Watch", enabled: true },
-  { antibiotic_name: "Piperacillina/Tazobactam", active_ingredient: "piperacillin + tazobactam", specimen_types: ["espettorato", "ferita", "sangue"], commercial_names: ["Tazocin", "Zosyn"], aware_group: "Watch", enabled: true },
-  { antibiotic_name: "Vancomicina", active_ingredient: "vancomycin", specimen_types: ["ferita", "sangue"], commercial_names: [], aware_group: "Watch", enabled: true },
-  { antibiotic_name: "Linezolid", active_ingredient: "linezolid", specimen_types: ["ferita", "sangue"], commercial_names: ["Zyvoxid"], aware_group: "Reserve", enabled: true },
-  { antibiotic_name: "Meropenem", active_ingredient: "meropenem", specimen_types: ["sangue", "ferita"], commercial_names: ["Merrem"], aware_group: "Watch", enabled: true },
+const PRESETS = [
+  { id: "glyc3", name: "Curva glicemica 3 punti", type: "glyc", times: [0, 60, 120] },
+  { id: "glyc3_preg", name: "Curva glicemica 3 punti in gravidanza", type: "glyc", times: [0, 60, 120], pregnant: true },
+  { id: "glyc4", name: "Curva glicemica 4 punti", type: "glyc", times: [0, 30, 60, 120] },
+  { id: "glyc5", name: "Curva glicemica 5 punti", type: "glyc", times: [0, 30, 60, 90, 120] },
+  { id: "glyc6", name: "Curva glicemica 6 punti", type: "glyc", times: [0, 30, 60, 90, 120, 180] },
 ];
 
-const DEFAULT_CATALOG = RAW_DEFAULT_CATALOG.map((x) => ({ ...x, ...(ANTI_META[x.antibiotic_name] || {}) }));
+const DEFAULT_REPORT_SETTINGS = {
+  report_title: "Referto Curva da Carico Orale di Glucosio",
+  header_line1: "Centro Polispecialistico Giovanni Paolo I srl",
+  header_line2: "Via Ignazio Garbini, 25 - 01100 Viterbo",
+  header_line3: "Tel 0761 304260 - www.polispecialisticoviterbo.it",
+  include_interpretation_pdf: true,
+  merge_charts_pdf: true,
+  header_logo_data_url: null,
+};
 
-function deepClone(obj) {
-  return JSON.parse(JSON.stringify(obj));
+function deepClone(x) {
+  return JSON.parse(JSON.stringify(x));
 }
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function defaultDb() {
-  const catalog = DEFAULT_CATALOG.map((x, idx) => ({
-    id: idx + 1,
-    ...deepClone(x),
-    notes: x.notes || null,
-    created_at: nowIso(),
-    updated_at: nowIso(),
-  }));
-  return {
-    patients: [],
-    exams: [],
-    catalog,
-    seq: { patient: 1, exam: 1, catalog: catalog.length + 1 },
-  };
-}
-
-function readDb() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    const db = defaultDb();
-    writeDb(db);
-    return db;
-  }
+function loadStore() {
   try {
-    const db = JSON.parse(raw);
-    if (!db || typeof db !== "object") throw new Error("bad db");
-    db.patients = Array.isArray(db.patients) ? db.patients : [];
-    db.exams = Array.isArray(db.exams) ? db.exams : [];
-    db.catalog = Array.isArray(db.catalog) ? db.catalog : [];
-    db.seq = db.seq || { patient: 1, exam: 1, catalog: 1 };
-    return db;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) throw new Error("empty");
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") throw new Error("invalid");
+    if (!Array.isArray(data.patients)) data.patients = [];
+    if (!Array.isArray(data.exams)) data.exams = [];
+    if (!data.counters || typeof data.counters !== "object") data.counters = { patient: 0, exam: 0 };
+    data.counters.patient = Number(data.counters.patient || 0);
+    data.counters.exam = Number(data.counters.exam || 0);
+    return data;
   } catch {
-    const db = defaultDb();
-    writeDb(db);
-    return db;
+    const init = { patients: [], exams: [], counters: { patient: 0, exam: 0 } };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(init));
+    return init;
   }
 }
 
-function writeDb(db) {
+function saveStore(db) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 }
 
-function readSettings() {
-  const raw = localStorage.getItem(REPORT_SETTINGS_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+function normalizeReportSettings(input = {}) {
+  const src = { ...(input || {}) };
+
+  // Retrocompatibilità con vecchi nomi campo
+  if (typeof src.include_interpretation_pdf === "undefined" && typeof src.include_interpretation_default !== "undefined") {
+    src.include_interpretation_pdf = !!src.include_interpretation_default;
   }
-}
+  if (typeof src.merge_charts_pdf === "undefined" && typeof src.merge_charts_default !== "undefined") {
+    src.merge_charts_pdf = !!src.merge_charts_default;
+  }
 
-function writeSettings(s) {
-  localStorage.setItem(REPORT_SETTINGS_KEY, JSON.stringify(s));
-}
-
-const DEFAULT_REPORT_SETTINGS = {
-  report_title: "Referto Esame Microbiologico con MIC",
-  header_line1: "Centro Polispecialistico Giovanni Paolo I srl",
-  header_line2: "Laboratorio Analisi",
-  header_line3: "Referto microbiologico",
-  include_interpretation_pdf: true,
-  include_commercial_names_pdf: true,
-  header_logo_data_url: null,
-};
-
-function normalizeInterp(v) {
-  const s = String(v || "").trim().toUpperCase();
-  if (["S", "SUSCETTIBILE", "SENSITIVE"].includes(s)) return "S";
-  if (["I", "INTERMEDIO", "INCREASED EXPOSURE"].includes(s)) return "I";
-  if (["R", "RESISTENTE", "RESISTANT"].includes(s)) return "R";
-  return "-";
-}
-
-const awarePriority = { Access: 0, Watch: 1, Reserve: 2, Other: 3 };
-
-function parseMicNumeric(v) {
-  if (!v) return null;
-  const s = String(v).replace(",", ".").replace(/[^0-9.]/g, "");
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-function withDerived(entry) {
-  const sir = normalizeInterp(entry.interpretation);
   return {
-    ...entry,
-    interpretation: sir,
-    antibiotic_class: entry.antibiotic_class || null,
-    breakpoint_ref: entry.breakpoint_ref || null,
-    commercial_names: Array.isArray(entry.commercial_names) ? entry.commercial_names : [],
-    mic_numeric: parseMicNumeric(entry.mic),
+    ...DEFAULT_REPORT_SETTINGS,
+    ...src,
+    include_interpretation_pdf: !!src.include_interpretation_pdf,
+    merge_charts_pdf: !!src.merge_charts_pdf,
+    header_logo_data_url: src.header_logo_data_url || null,
   };
 }
 
-function computeResistancePatterns(specimen, rows) {
-  const resistant = rows.filter((x) => x.interpretation === "R");
-  const names = resistant.map((x) => String(x.antibiotic_name || "").toLowerCase());
-  const patterns = [];
-
-  const hasFq = names.some((n) => n.includes("cipro") || n.includes("levoflox"));
-  const has3genCeph = names.some((n) => n.includes("ceftriax") || n.includes("cefotax") || n.includes("ceftaz"));
-  const hasCarb = names.some((n) => n.includes("meropen") || n.includes("imipenem") || n.includes("ertapen"));
-
-  if (resistant.length >= 3) {
-    patterns.push("Multi-resistenza (MDR) sospetta: ≥3 antibiotici classificati R.");
+function loadReportSettings() {
+  try {
+    const raw = localStorage.getItem(REPORT_SETTINGS_KEY);
+    if (!raw) throw new Error("empty");
+    const parsed = JSON.parse(raw);
+    return normalizeReportSettings(parsed || {});
+  } catch {
+    localStorage.setItem(REPORT_SETTINGS_KEY, JSON.stringify(DEFAULT_REPORT_SETTINGS));
+    return deepClone(DEFAULT_REPORT_SETTINGS);
   }
-  if (hasFq && has3genCeph) {
-    patterns.push("Pattern compatibile con possibile ESBL: resistenza a cefalosporine di III gen e fluorochinoloni.");
-  }
-  if (hasCarb) {
-    patterns.push("Attenzione: resistenza ai carbapenemi nel pannello testato.");
-  }
-  if (specimen === "feci" && resistant.length >= 2) {
-    patterns.push("Nelle enteriti batteriche valutare terapia solo se indicata clinicamente.");
-  }
-  return patterns;
 }
 
-function interpret(payload) {
-  const specimen = String(payload.specimen_type || "").toLowerCase();
-  const growth = String(payload.growth_result || "positive").toLowerCase();
-  const entries = (payload.antibiogram || []).map(withDerived);
+function saveReportSettingsData(payload = {}) {
+  const merged = normalizeReportSettings(payload);
+  localStorage.setItem(REPORT_SETTINGS_KEY, JSON.stringify(merged));
+  return merged;
+}
 
-  const sensitive = entries.filter((e) => e.interpretation === "S");
-  const intermediate = entries.filter((e) => e.interpretation === "I");
-  const resistant = entries.filter((e) => e.interpretation === "R");
+function summaryFromStatus(overall) {
+  const map = {
+    normal: "Referto complessivamente nei limiti di riferimento.",
+    warning: "Referto con alterazioni da correlare clinicamente.",
+    danger: "Referto con alterazioni: necessaria valutazione medica.",
+  };
+  return map[overall] || map.normal;
+}
 
-  const recommended = [...sensitive].sort((a, b) => {
-    const pa = awarePriority[a.aware_group] ?? 9;
-    const pb = awarePriority[b.aware_group] ?? 9;
-    if (pa !== pb) return pa - pb;
-    const ma = Number.isFinite(a.mic_numeric) ? a.mic_numeric : 999999;
-    const mb = Number.isFinite(b.mic_numeric) ? b.mic_numeric : 999999;
-    if (ma !== mb) return ma - mb;
-    return String(a.antibiotic_name || "").localeCompare(String(b.antibiotic_name || ""));
+function evaluateSeries(times, values, refs) {
+  const rows = [];
+  let severity = "normal";
+
+  for (let i = 0; i < times.length; i += 1) {
+    const t = Number(times[i]);
+    const raw = values[i];
+
+    const hasValue = !(raw === null || raw === undefined || String(raw).trim?.() === "");
+    const v = hasValue ? Number(String(raw).replace(",", ".")) : null;
+
+    const ref = refs[String(t)] || refs[t] || { min: 0, max: 0 };
+    const min = Number(ref.min);
+    const max = Number(ref.max);
+
+    let status = "missing";
+    if (hasValue && Number.isFinite(v)) {
+      status = "normal";
+      if (v < min) {
+        status = "low";
+        if (severity === "normal") severity = "warning";
+      } else if (v > max) {
+        status = "high";
+        if (severity === "normal" || severity === "warning") severity = "danger";
+      }
+    }
+
+    rows.push({
+      time: t,
+      value: Number.isFinite(v) ? v : null,
+      ref: { min: Number.isFinite(min) ? min : 0, max: Number.isFinite(max) ? max : 0 },
+      status,
+    });
+  }
+
+  return { rows, severity };
+}
+
+function interpretExam(payload) {
+  const glyc_times = Array.isArray(payload.glyc_times) ? payload.glyc_times : [];
+  const glyc_values = Array.isArray(payload.glyc_values) ? payload.glyc_values : [];
+
+  const includeIns = payload?.include_insulin === true || payload?.curve_mode === "combined";
+  const ins_times = includeIns && Array.isArray(payload.ins_times) ? payload.ins_times : [];
+  const ins_values = includeIns && Array.isArray(payload.ins_values) ? payload.ins_values : [];
+
+  const glyc_refs = payload.glyc_refs || {};
+  const ins_refs = includeIns ? (payload.ins_refs || {}) : {};
+  const pregnant = !!payload.pregnant_mode;
+
+  const glyRes = evaluateSeries(glyc_times, glyc_values, glyc_refs);
+  const insRes = includeIns ? evaluateSeries(ins_times, ins_values, ins_refs) : { rows: [], severity: "normal" };
+
+  let overall = "normal";
+  [glyRes.severity, insRes.severity].forEach((sev) => {
+    if (sev === "danger") overall = "danger";
+    else if (sev === "warning" && overall === "normal") overall = "warning";
   });
 
-  const microorganism = payload.microorganism ? String(payload.microorganism).trim() : "";
-  let summary = "";
-  if (growth === "negative") {
-    summary = "Nessuna crescita significativa nel campione inviato.";
-  } else if (recommended.length) {
-    const names = recommended.slice(0, 6).map((r) => {
-      const comm = (r.commercial_names || []).join(", ");
-      return comm ? `${r.antibiotic_name} (esempi: ${comm})` : r.antibiotic_name;
+  // Diagnostica glicemica su valori realmente presenti
+  let gly_diag = null;
+  if (glyc_times.includes(120)) {
+    const i120 = glyc_times.indexOf(120);
+    const raw120 = glyc_values[i120];
+    const v120 = raw120 === null || raw120 === undefined || String(raw120).trim() === ""
+      ? null
+      : Number(String(raw120).replace(",", "."));
+
+    if (Number.isFinite(v120)) {
+      if (pregnant) {
+        const pick = (t) => {
+          if (!glyc_times.includes(t)) return null;
+          const raw = glyc_values[glyc_times.indexOf(t)];
+          if (raw === null || raw === undefined || String(raw).trim() === "") return null;
+          const n = Number(String(raw).replace(",", "."));
+          return Number.isFinite(n) ? n : null;
+        };
+
+        const v0 = pick(0);
+        const v60 = pick(60);
+        const gdm = (v0 !== null && v0 >= 92) || (v60 !== null && v60 >= 180) || (v120 >= 153);
+
+        if (gdm) {
+          gly_diag = "Criteri IADPSG compatibili con diabete gestazionale (almeno un valore sopra soglia).";
+          if (overall !== "danger") overall = "danger";
+        } else {
+          gly_diag = "Criteri IADPSG nei limiti.";
+        }
+      } else if (v120 < 140) {
+        gly_diag = "Tolleranza glucidica normale.";
+      } else if (v120 < 200) {
+        gly_diag = "Ridotta tolleranza al glucosio (IGT).";
+        if (overall === "normal") overall = "warning";
+      } else {
+        gly_diag = "Valore suggestivo di diabete mellito (da confermare clinicamente).";
+        overall = "danger";
+      }
+    }
+  }
+
+  let ins_diag = null;
+  const numericIns = (ins_values || [])
+    .map((x) => (x === null || x === undefined || String(x).trim?.() === "" ? null : Number(String(x).replace(",", "."))))
+    .filter((x) => Number.isFinite(x));
+
+  if (includeIns && ins_times.length > 0 && numericIns.length > 0) {
+    const normalized = (ins_values || []).map((x) => {
+      if (x === null || x === undefined || String(x).trim?.() === "") return null;
+      const n = Number(String(x).replace(",", "."));
+      return Number.isFinite(n) ? n : null;
     });
-    summary = `${microorganism || "Microrganismo isolato"}: antibiotici sensibili nel pannello testato -> ${names.join("; ")}.`;
-  } else {
-    summary = `${microorganism || "Microrganismo isolato"}: nessun antibiotico classificato come sensibile (S).`;
+
+    const peak_val = Math.max(...numericIns);
+    const peak_idx = normalized.findIndex((x) => x === peak_val);
+    const peak_time = peak_idx >= 0 ? ins_times[peak_idx] : null;
+    const v0 = normalized[0];
+    const idx120 = ins_times.indexOf(120);
+    const v120 = idx120 >= 0 ? normalized[idx120] : null;
+
+    if (peak_time !== null) {
+      if (peak_time <= 60 && (v120 === null || v0 === null || v120 <= v0 * 3)) {
+        ins_diag = "Pattern insulinemico nel range atteso.";
+      } else if (peak_time > 60) {
+        ins_diag = `Picco insulinemico ritardato (picco a ${peak_time}'). Possibile insulino-resistenza.`;
+        if (overall === "normal") overall = "warning";
+      } else if (v120 !== null && v0 !== null && v120 > v0 * 3) {
+        ins_diag = "Ritorno lento verso il basale a 120'.";
+        if (overall === "normal") overall = "warning";
+      }
+    }
   }
 
-  const resistance_patterns = computeResistancePatterns(specimen, entries);
-
-  const warnings = [];
-  if (specimen === "feci") {
-    warnings.push("Nei quadri enterici molte infezioni sono autolimitanti: l'antibiotico si valuta solo se clinicamente indicato.");
-  }
-  if (growth !== "negative") {
-    warnings.push("La scelta terapeutica finale deve considerare sede infezione, dosaggio, allergie, gravidanza, funzione renale e linee guida locali.");
-  }
-
-  const first_choice = recommended.length ? recommended[0] : null;
   return {
-    sensitive,
-    intermediate,
-    resistant,
-    recommended,
-    first_choice,
-    resistance_patterns,
-    summary,
-    warnings,
+    overall_status: overall,
+    summary: summaryFromStatus(overall),
+    details: {
+      glycemic_rows: glyRes.rows,
+      insulin_rows: includeIns ? insRes.rows : [],
+      glycemic_interpretation: gly_diag,
+      insulin_interpretation: includeIns ? ins_diag : null,
+    },
   };
 }
 
-function patientSort(a, b) {
-  const s = String(a.surname || "").localeCompare(String(b.surname || ""));
-  return s !== 0 ? s : String(a.name || "").localeCompare(String(b.name || ""));
+function toDateString(value) {
+  if (!value) return value;
+  return String(value).slice(0, 10);
 }
 
-function listCatalogBy(db, { search = "", specimen = "", only_enabled = true } = {}) {
-  const s = String(search || "").trim().toLowerCase();
-  const sp = String(specimen || "").trim().toLowerCase();
-
-  return db.catalog
-    .filter((x) => !only_enabled || x.enabled)
-    .filter(
-      (x) =>
-        !s ||
-        String(x.antibiotic_name).toLowerCase().includes(s) ||
-        String(x.active_ingredient || "").toLowerCase().includes(s) ||
-        String(x.antibiotic_class || "").toLowerCase().includes(s)
-    )
-    .filter((x) => {
-      if (!sp) return true;
-      const types = (x.specimen_types || []).map((t) => String(t).toLowerCase());
-      return types.includes(sp) || types.includes("all");
-    })
-    .sort((a, b) => String(a.antibiotic_name).localeCompare(String(b.antibiotic_name)));
+function toPatientOut(p) {
+  return {
+    id: Number(p.id),
+    surname: p.surname,
+    name: p.name,
+    birth_date: p.birth_date || null,
+    sex: p.sex || "M",
+    fiscal_code: p.fiscal_code || null,
+    phone: p.phone || null,
+    email: p.email || null,
+    notes: p.notes || null,
+    created_at: p.created_at || nowIso(),
+    updated_at: p.updated_at || nowIso(),
+  };
 }
 
-function buildPanels(db) {
-  const panels = {};
-  for (const s of SPECIMEN_TYPES) {
-    panels[s.id] = listCatalogBy(db, { specimen: s.id, only_enabled: true });
-  }
-  return panels;
+function toExamListItem(e) {
+  return {
+    id: Number(e.id),
+    patient_id: Number(e.patient_id),
+    exam_date: e.exam_date,
+    curve_mode: e.curve_mode,
+    interpretation_summary: e.interpretation_summary || null,
+    created_at: e.created_at || nowIso(),
+  };
+}
+
+function toExamOut(e) {
+  return deepClone({
+    id: Number(e.id),
+    patient_id: Number(e.patient_id),
+    exam_date: e.exam_date,
+    requester_doctor: e.requester_doctor || null,
+    acceptance_number: e.acceptance_number || null,
+    curve_mode: e.curve_mode || (e.include_insulin ? "combined" : "glyc"),
+    include_insulin: e.include_insulin === true || e.curve_mode === "combined",
+    pregnant_mode: !!e.pregnant_mode,
+    glucose_load_g: Number(e.glucose_load_g ?? 75),
+    glyc_unit: e.glyc_unit || "mg/dL",
+    ins_unit: e.ins_unit || "µUI/mL",
+    glyc_times: e.glyc_times || [],
+    ins_times: e.ins_times || [],
+    glyc_values: e.glyc_values || [],
+    ins_values: e.ins_values || [],
+    glyc_refs: e.glyc_refs || {},
+    ins_refs: e.ins_refs || {},
+    methodology: e.methodology || null,
+    notes: e.notes || null,
+    interpretation_summary: e.interpretation_summary || null,
+    interpretation: e.interpretation || interpretExam(e),
+    created_at: e.created_at || nowIso(),
+  });
 }
 
 export const localApi = {
   async health() {
-    return { status: "ok", app: "MicroLab local", env: "browser-local" };
+    return { status: "ok", app: "CurveLab (local browser DB)", env: "local" };
   },
 
   async getPresets() {
-    const db = readDb();
     return {
-      specimen_types: deepClone(SPECIMEN_TYPES),
-      catalog: deepClone(db.catalog.filter((x) => x.enabled)),
-      default_panels: deepClone(buildPanels(db)),
+      presets: deepClone(PRESETS),
+      default_glyc_refs: deepClone(DEFAULT_GLYC_REFS),
+      pregnant_glyc_refs: deepClone(PREGNANT_GLYC_REFS),
+      default_ins_refs: deepClone(DEFAULT_INS_REFS),
       references_metadata: deepClone(REFERENCES_METADATA),
-      default_methodologies: deepClone(DEFAULT_METHODOLOGIES),
+      default_methodologies: deepClone(DEFAULT_METHODS),
     };
   },
 
   async getReportSettings() {
-    return readSettings() || deepClone(DEFAULT_REPORT_SETTINGS);
+    return loadReportSettings();
   },
 
   async saveReportSettings(payload) {
-    const merged = { ...DEFAULT_REPORT_SETTINGS, ...(payload || {}) };
-    writeSettings(merged);
-    return merged;
-  },
-
-  async listCatalog(filters = {}) {
-    const db = readDb();
-    return deepClone(listCatalogBy(db, filters));
-  },
-
-  async createCatalogItem(payload) {
-    const db = readDb();
-    const meta = ANTI_META[String(payload.antibiotic_name || "").trim()] || {};
-    const item = {
-      id: db.seq.catalog++,
-      antibiotic_name: String(payload.antibiotic_name || "").trim(),
-      antibiotic_class: (payload.antibiotic_class || "").trim() || meta.antibiotic_class || null,
-      active_ingredient: (payload.active_ingredient || "").trim() || null,
-      breakpoint_ref: (payload.breakpoint_ref || "").trim() || meta.breakpoint_ref || null,
-      specimen_types: Array.isArray(payload.specimen_types) ? payload.specimen_types : [],
-      commercial_names: Array.isArray(payload.commercial_names) ? payload.commercial_names : [],
-      aware_group: payload.aware_group || null,
-      notes: payload.notes || null,
-      enabled: payload.enabled !== false,
-      created_at: nowIso(),
-      updated_at: nowIso(),
-    };
-    db.catalog.push(item);
-    writeDb(db);
-    return deepClone(item);
-  },
-
-  async updateCatalogItem(id, payload) {
-    const db = readDb();
-    const idx = db.catalog.findIndex((x) => x.id === Number(id));
-    if (idx < 0) throw new Error("Antibiotico non trovato");
-    db.catalog[idx] = {
-      ...db.catalog[idx],
-      ...payload,
-      updated_at: nowIso(),
-    };
-    writeDb(db);
-    return deepClone(db.catalog[idx]);
-  },
-
-  async deleteCatalogItem(id) {
-    const db = readDb();
-    db.catalog = db.catalog.filter((x) => x.id !== Number(id));
-    writeDb(db);
-    return null;
+    return saveReportSettingsData(payload || {});
   },
 
   async listPatients(search = "") {
-    const db = readDb();
-    const q = String(search || "").toLowerCase().trim();
-    const rows = db.patients
-      .filter((p) => !q || [p.surname, p.name, p.fiscal_code].some((x) => String(x || "").toLowerCase().includes(q)))
-      .sort(patientSort);
-    return deepClone(rows);
+    const db = loadStore();
+    const q = String(search || "").trim().toLowerCase();
+    let rows = db.patients.map(toPatientOut);
+
+    if (q) {
+      rows = rows.filter((p) => {
+        const blob = `${p.surname} ${p.name} ${p.fiscal_code || ""}`.toLowerCase();
+        return blob.includes(q);
+      });
+    }
+
+    rows.sort((a, b) => {
+      const s1 = `${a.surname} ${a.name}`.toLowerCase();
+      const s2 = `${b.surname} ${b.name}`.toLowerCase();
+      return s1.localeCompare(s2, "it");
+    });
+
+    return rows;
   },
 
   async createPatient(payload) {
-    const db = readDb();
-    const row = {
-      id: db.seq.patient++,
-      surname: payload.surname,
-      name: payload.name,
-      birth_date: payload.birth_date || null,
-      sex: payload.sex || "M",
+    if (!payload?.surname || !payload?.name) {
+      throw new Error("Cognome e nome sono obbligatori.");
+    }
+
+    const db = loadStore();
+    const id = ++db.counters.patient;
+    const now = nowIso();
+
+    const row = toPatientOut({
+      id,
+      surname: String(payload.surname).trim(),
+      name: String(payload.name).trim(),
+      birth_date: toDateString(payload.birth_date),
+      sex: payload.sex === "F" ? "F" : "M",
       fiscal_code: payload.fiscal_code || null,
       phone: payload.phone || null,
       email: payload.email || null,
       notes: payload.notes || null,
-      created_at: nowIso(),
-      updated_at: nowIso(),
-    };
+      created_at: now,
+      updated_at: now,
+    });
+
     db.patients.push(row);
-    writeDb(db);
-    return deepClone(row);
+    saveStore(db);
+    return row;
   },
 
   async updatePatient(id, payload) {
-    const db = readDb();
-    const idx = db.patients.findIndex((x) => x.id === Number(id));
-    if (idx < 0) throw new Error("Paziente non trovato");
-    db.patients[idx] = { ...db.patients[idx], ...payload, updated_at: nowIso() };
-    writeDb(db);
-    return deepClone(db.patients[idx]);
+    const db = loadStore();
+    const idx = db.patients.findIndex((p) => Number(p.id) === Number(id));
+    if (idx === -1) throw new Error("Paziente non trovato");
+
+    const cur = db.patients[idx];
+    const normalizedPayload = { ...(payload || {}) };
+    const merged = toPatientOut({
+      ...cur,
+      ...normalizedPayload,
+      id: cur.id,
+      birth_date: payload.birth_date !== undefined ? toDateString(payload.birth_date) : cur.birth_date,
+      sex: payload.sex ? (payload.sex === "F" ? "F" : "M") : cur.sex,
+      updated_at: nowIso(),
+    });
+
+    db.patients[idx] = merged;
+    saveStore(db);
+    return merged;
   },
 
   async deletePatient(id) {
-    const db = readDb();
+    const db = loadStore();
     const pid = Number(id);
-    db.patients = db.patients.filter((x) => x.id !== pid);
-    db.exams = db.exams.filter((x) => x.patient_id !== pid);
-    writeDb(db);
+    db.patients = db.patients.filter((p) => Number(p.id) !== pid);
+    db.exams = db.exams.filter((e) => Number(e.patient_id) !== pid);
+    saveStore(db);
     return null;
   },
 
   async previewExam(payload) {
-    return interpret(payload);
+    return interpretExam(payload || {});
   },
 
   async saveExam(payload) {
-    const db = readDb();
-    const interp = interpret(payload);
-    const exam = {
-      id: db.seq.exam++,
-      ...payload,
-      interpretation_summary: interp.summary || "",
-      interpretation: interp,
-      created_at: nowIso(),
-      updated_at: nowIso(),
-    };
-    db.exams.push(exam);
-    writeDb(db);
-    return deepClone(exam);
+    const db = loadStore();
+
+    const normalizedPayload = { ...(payload || {}) };
+    const includeIns = normalizedPayload.include_insulin === true || normalizedPayload.curve_mode === "combined";
+    normalizedPayload.include_insulin = includeIns;
+    normalizedPayload.curve_mode = includeIns ? "combined" : "glyc";
+    if (includeIns && Array.isArray(normalizedPayload.glyc_times)) {
+      normalizedPayload.ins_times = [...normalizedPayload.glyc_times];
+    } else if (!includeIns) {
+      normalizedPayload.ins_times = [];
+      normalizedPayload.ins_values = [];
+      normalizedPayload.ins_refs = {};
+    }
+    const pid = Number(normalizedPayload?.patient_id);
+    const patient = db.patients.find((p) => Number(p.id) === pid);
+    if (!patient) throw new Error("Paziente non trovato");
+
+    const interpretation = interpretExam(normalizedPayload || {});
+    const id = ++db.counters.exam;
+    const now = nowIso();
+
+    const row = toExamOut({
+      id,
+      ...normalizedPayload,
+      exam_date: toDateString(normalizedPayload.exam_date),
+      interpretation,
+      interpretation_summary: interpretation.summary,
+      created_at: now,
+    });
+
+    db.exams.push(row);
+    saveStore(db);
+    return row;
   },
 
   async listExams(patientId) {
-    const db = readDb();
+    const db = loadStore();
     const pid = Number(patientId);
     const rows = db.exams
-      .filter((x) => x.patient_id === pid)
-      .sort((a, b) => String(b.exam_date || "").localeCompare(String(a.exam_date || "")));
-    return deepClone(rows);
+      .filter((e) => Number(e.patient_id) === pid)
+      .map(toExamListItem)
+      .sort((a, b) => {
+        const c = String(b.exam_date).localeCompare(String(a.exam_date));
+        return c !== 0 ? c : Number(b.id) - Number(a.id);
+      });
+
+    return rows;
   },
 
   async getExam(id) {
-    const db = readDb();
-    const row = db.exams.find((x) => x.id === Number(id));
+    const db = loadStore();
+    const row = db.exams.find((e) => Number(e.id) === Number(id));
     if (!row) throw new Error("Esame non trovato");
-    return deepClone(row);
+    return toExamOut(row);
   },
 
   async deleteExam(id) {
-    const db = readDb();
-    db.exams = db.exams.filter((x) => x.id !== Number(id));
-    writeDb(db);
+    const db = loadStore();
+    db.exams = db.exams.filter((e) => Number(e.id) !== Number(id));
+    saveStore(db);
     return null;
   },
 };
+
+export function clearLocalDatabase() {
+  localStorage.removeItem(STORAGE_KEY);
+}

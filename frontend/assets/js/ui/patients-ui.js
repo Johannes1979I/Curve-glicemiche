@@ -12,7 +12,7 @@ function patientItemTemplate(p) {
     <div class="row">
       <button data-action="select" data-id="${p.id}">Seleziona</button>
       <button data-action="edit" data-id="${p.id}">Modifica</button>
-      <button data-action="delete" data-id="${p.id}" class="danger">Elimina</button>
+      <button data-action="delete" data-id="${p.id}">Elimina</button>
     </div>
   </div>`;
 }
@@ -29,81 +29,84 @@ function fillPatientForm(p) {
   document.getElementById("patient_notes").value = p.notes || "";
 }
 
-function resetPatientForm() {
+function readPatientForm() {
+  return {
+    surname: document.getElementById("surname").value.trim(),
+    name: document.getElementById("name").value.trim(),
+    birth_date: document.getElementById("birth_date").value || null,
+    sex: document.getElementById("sex").value,
+    fiscal_code: document.getElementById("fiscal_code").value.trim() || null,
+    phone: document.getElementById("phone").value.trim() || null,
+    email: document.getElementById("email").value.trim() || null,
+    notes: document.getElementById("patient_notes").value.trim() || null,
+  };
+}
+
+function clearPatientForm() {
   fillPatientForm({});
 }
 
-function updateSelectedLabel() {
-  const el = document.getElementById("selectedPatientLabel");
-  if (!state.selectedPatient) {
-    el.textContent = "Seleziona prima un paziente";
-    return;
-  }
-  el.textContent = `Paziente selezionato: ${state.selectedPatient.surname} ${state.selectedPatient.name} (ID ${state.selectedPatient.id})`;
+function setSelectedPatient(p) {
+  state.selectedPatient = p;
+  document.getElementById("selectedPatientLabel").textContent =
+    `Paziente selezionato: ${p.surname} ${p.name} (ID ${p.id})`;
+  refreshExamHistory();
 }
 
-export async function refreshPatients() {
-  const search = document.getElementById("searchPatient").value.trim();
-  const rows = await api.listPatients(search);
-  const list = document.getElementById("patientsList");
-  list.innerHTML = rows.map(patientItemTemplate).join("") || '<div class="muted">Nessun paziente trovato</div>';
-  list.querySelectorAll("button[data-action]").forEach((btn) => {
+export async function refreshPatients(search = "") {
+  const list = await api.listPatients(search);
+  const box = document.getElementById("patientsList");
+  box.innerHTML = list.map(patientItemTemplate).join("") || "<small>Nessun paziente trovato</small>";
+
+  box.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.id);
-      const row = rows.find((x) => x.id === id);
-      if (!row) return;
-
       const action = btn.dataset.action;
+      const p = list.find((x) => x.id === id);
+      if (!p) return;
+
       if (action === "select") {
-        state.selectedPatient = row;
-        updateSelectedLabel();
-        await refreshExamHistory();
+        setSelectedPatient(p);
       } else if (action === "edit") {
-        fillPatientForm(row);
+        fillPatientForm(p);
       } else if (action === "delete") {
         if (!confirm("Eliminare paziente e relativi esami?")) return;
         await api.deletePatient(id);
         if (state.selectedPatient?.id === id) {
           state.selectedPatient = null;
-          updateSelectedLabel();
-          await refreshExamHistory();
+          document.getElementById("selectedPatientLabel").textContent = "Seleziona prima un paziente";
+          document.getElementById("examHistory").innerHTML = "";
         }
-        await refreshPatients();
+        await refreshPatients(document.getElementById("searchPatient").value.trim());
       }
     });
   });
 }
 
 export function bindPatientUI() {
-  updateSelectedLabel();
+  document.getElementById("btnSearchPatient").addEventListener("click", () => {
+    refreshPatients(document.getElementById("searchPatient").value.trim());
+  });
 
-  document.getElementById("btnSearchPatient").addEventListener("click", refreshPatients);
-  document.getElementById("btnResetPatient").addEventListener("click", resetPatientForm);
+  document.getElementById("btnResetPatient").addEventListener("click", clearPatientForm);
 
-  document.getElementById("patientForm").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const id = Number(document.getElementById("patientId").value || 0);
-    const payload = {
-      surname: document.getElementById("surname").value.trim(),
-      name: document.getElementById("name").value.trim(),
-      birth_date: document.getElementById("birth_date").value || null,
-      sex: document.getElementById("sex").value,
-      fiscal_code: document.getElementById("fiscal_code").value.trim() || null,
-      phone: document.getElementById("phone").value.trim() || null,
-      email: document.getElementById("email").value.trim() || null,
-      notes: document.getElementById("patient_notes").value.trim() || null,
-    };
+  document.getElementById("patientForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const id = document.getElementById("patientId").value;
+    const payload = readPatientForm();
     if (!payload.surname || !payload.name) {
       alert("Cognome e nome sono obbligatori.");
       return;
     }
 
-    if (id > 0) {
-      await api.updatePatient(id, payload);
+    if (id) {
+      await api.updatePatient(Number(id), payload);
     } else {
-      await api.createPatient(payload);
+      const created = await api.createPatient(payload);
+      setSelectedPatient(created);
     }
-    resetPatientForm();
-    await refreshPatients();
+
+    clearPatientForm();
+    await refreshPatients(document.getElementById("searchPatient").value.trim());
   });
 }

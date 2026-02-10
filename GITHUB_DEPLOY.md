@@ -1,25 +1,12 @@
-# Deploy rapido su GitHub
+# Guida rapida: voglio un solo link funzionante
 
-## 1) Carica i file
-- Estrai lo ZIP in locale
-- Copia tutto nella tua repository
-- Commit + Push su `main`
+## Scenario 1 (immediato)
+- Pubblica `docs/` su GitHub Pages.
+- Apri il link Pages.
+- App funzionante con archivio locale nel browser.
 
-## 2) Attiva GitHub Pages
-- Vai in **Settings → Pages**
-- Source: **Deploy from a branch**
-- Branch: `main`
-- Folder: `/docs`
-- Save
-
-## 3) Apri il link
-Dopo 1-2 minuti il sito è disponibile nel link Pages della repo.
-
-## 4) Modalità backend (opzionale)
-Se vuoi DB centralizzato:
-- pubblica `backend/` su Render/Railway/VPS
-- imposta in `docs/assets/js/config.js` il campo:
-```js
-API_BASE_URL: "https://TUO-BACKEND/api"
-```
-e fai commit/push.
+## Scenario 2 (condivisione dati tra più PC)
+- Deploya `backend/` su Render/Railway/VPS.
+- Metti URL API in `docs/assets/js/config.js`.
+- Ripubblica su GitHub Pages.
+- Ora tutti i client usano lo stesso DB centralizzato.

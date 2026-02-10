@@ -1,9 +1,8 @@
 from datetime import date, datetime
-from typing import List, Optional, Literal
+from typing import Dict, List, Literal, Optional, Any
 from pydantic import BaseModel, Field, ConfigDict
 
 
-# ------------------- Patients -------------------
 class PatientBase(BaseModel):
     surname: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=100)
@@ -38,81 +37,44 @@ class PatientOut(PatientBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ------------------- Catalog -------------------
-class CatalogItemBase(BaseModel):
-    antibiotic_name: str = Field(min_length=1, max_length=120)
-    antibiotic_class: Optional[str] = None
-    active_ingredient: Optional[str] = None
-    breakpoint_ref: Optional[str] = None
-    specimen_types: List[str] = Field(default_factory=list)
-    commercial_names: List[str] = Field(default_factory=list)
-    aware_group: Optional[Literal["Access", "Watch", "Reserve", "Other"]] = None
-    notes: Optional[str] = None
-    enabled: bool = True
-
-
-class CatalogItemCreate(CatalogItemBase):
-    pass
-
-
-class CatalogItemUpdate(BaseModel):
-    antibiotic_name: Optional[str] = None
-    antibiotic_class: Optional[str] = None
-    active_ingredient: Optional[str] = None
-    breakpoint_ref: Optional[str] = None
-    specimen_types: Optional[List[str]] = None
-    commercial_names: Optional[List[str]] = None
-    aware_group: Optional[Literal["Access", "Watch", "Reserve", "Other"]] = None
-    notes: Optional[str] = None
-    enabled: Optional[bool] = None
-
-
-class CatalogItemOut(CatalogItemBase):
-    id: int
-    created_at: datetime
-    updated_at: datetime
-
-
-# ------------------- Exams -------------------
-class ExamAntibiogramEntry(BaseModel):
-    antibiotic_id: Optional[int] = None
-    antibiotic_name: str = Field(min_length=1, max_length=120)
-    antibiotic_class: Optional[str] = None
-    active_ingredient: Optional[str] = None
-    mic: Optional[str] = None
-    breakpoint_ref: Optional[str] = None
-    interpretation: Literal["S", "I", "R", "-"] = "-"
-    commercial_names: List[str] = Field(default_factory=list)
-    aware_group: Optional[str] = None
-    notes: Optional[str] = None
+class RefRange(BaseModel):
+    min: float
+    max: float
 
 
 class ExamPayload(BaseModel):
     patient_id: int
     exam_date: date
-    acceptance_number: Optional[str] = None
     requester_doctor: Optional[str] = None
-    specimen_type: str = Field(min_length=1, max_length=50)
-    growth_result: Literal["positive", "negative", "mixed"] = "positive"
-    microorganism: Optional[str] = None
+    acceptance_number: Optional[str] = None
+
+    curve_mode: Literal["glyc", "ins", "combined"] = "glyc"
+    pregnant_mode: bool = False
+    glucose_load_g: int = 75
+
+    glyc_unit: str = "mg/dL"
+    ins_unit: str = "µUI/mL"
+
+    glyc_times: List[int] = Field(default_factory=list)
+    ins_times: List[int] = Field(default_factory=list)
+    glyc_values: List[float] = Field(default_factory=list)
+    ins_values: List[float] = Field(default_factory=list)
+
+    glyc_refs: Dict[str, RefRange] = Field(default_factory=dict)
+    ins_refs: Dict[str, RefRange] = Field(default_factory=dict)
+
     methodology: Optional[str] = None
     notes: Optional[str] = None
-    antibiogram: List[ExamAntibiogramEntry] = Field(default_factory=list)
+
+
+class InterpretationOut(BaseModel):
+    overall_status: Literal["normal", "warning", "danger"]
+    summary: str
+    details: Dict[str, Any]
 
 
 class ExamCreate(ExamPayload):
     pass
-
-
-class InterpretationOut(BaseModel):
-    sensitive: List[ExamAntibiogramEntry] = Field(default_factory=list)
-    intermediate: List[ExamAntibiogramEntry] = Field(default_factory=list)
-    resistant: List[ExamAntibiogramEntry] = Field(default_factory=list)
-    recommended: List[ExamAntibiogramEntry] = Field(default_factory=list)
-    first_choice: Optional[ExamAntibiogramEntry] = None
-    resistance_patterns: List[str] = Field(default_factory=list)
-    summary: str = ""
-    warnings: List[str] = Field(default_factory=list)
 
 
 class ExamOut(ExamPayload):
@@ -120,19 +82,30 @@ class ExamOut(ExamPayload):
     interpretation_summary: Optional[str] = None
     interpretation: InterpretationOut
     created_at: datetime
-    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
-# ------------------- Report settings -------------------
+class ExamListItem(BaseModel):
+    id: int
+    patient_id: int
+    exam_date: date
+    curve_mode: str
+    interpretation_summary: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ReportSettingsIn(BaseModel):
-    report_title: str = "Referto Esame Microbiologico con MIC"
-    header_line1: Optional[str] = None
-    header_line2: Optional[str] = None
-    header_line3: Optional[str] = None
-    include_interpretation_pdf: bool = True
-    include_commercial_names_pdf: bool = True
+    report_title: str = Field(default="Referto Curva da Carico Orale di Glucosio", max_length=180)
+    header_line1: str = Field(default="Centro Polispecialistico Giovanni Paolo I srl", max_length=180)
+    header_line2: str = Field(default="Via Ignazio Garbini, 25 - 01100 Viterbo", max_length=180)
+    header_line3: str = Field(default="Tel 0761 304260 - www.polispecialisticoviterbo.it", max_length=180)
     header_logo_data_url: Optional[str] = None
+    include_interpretation_default: bool = True
+    merge_charts_default: bool = True
 
 
 class ReportSettingsOut(ReportSettingsIn):
-    pass
+    updated_at: Optional[str] = None

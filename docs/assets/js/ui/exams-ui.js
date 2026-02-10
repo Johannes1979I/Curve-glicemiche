@@ -1,429 +1,526 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
+import { escapeHtml, formatDate } from "../utils.js";
+import { renderCharts } from "./charts-ui.js";
+import { generatePdf } from "./report-ui.js";
 
-function $(id) {
+function el(id) {
   return document.getElementById(id);
 }
 
-function specimenLabel(specimenId) {
-  const s = state.specimenTypes.find((x) => x.id === specimenId);
-  return s ? s.label : specimenId;
-}
-
-function csvToList(v) {
-  return String(v || "")
+function parseCsvInts(text) {
+  return String(text || "")
     .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
+    .map((x) => Number(String(x).trim()))
+    .filter((n) => Number.isFinite(n))
+    .map((n) => Math.round(n));
 }
 
-function interpLabel(code) {
-  const x = String(code || "-").toUpperCase();
-  if (x === "S") return "Sensibile";
-  if (x === "I") return "Sensibile con aumentata esposizione";
-  if (x === "R") return "Resistente";
-  return "Non interpretato";
+function toCsv(arr) {
+  return (arr || []).join(",");
 }
 
-function interpTagClass(code) {
-  const x = String(code || "-").toUpperCase();
-  if (x === "S") return "interp-tag interp-S";
-  if (x === "I") return "interp-tag interp-I";
-  if (x === "R") return "interp-tag interp-R";
-  return "interp-tag interp--";
+function getSelectedPreset() {
+  const id = el("preset").value;
+  return state.presets.find((p) => p.id === id) || null;
 }
 
-function renderRefsSource() {
-  const box = $("refsSourceInfo");
-  const meta = state.presetsMeta;
-  if (!box || !meta) return;
-  const src = (meta.sources || []).map((s) => `<li>${s}</li>`).join("");
-  box.innerHTML = `
-    <strong>Profilo di riferimento:</strong> ${meta.profile_name || "-"}<br/>
-    <small>${meta.dataset_name || ""} • v${meta.dataset_version || ""} • aggiornato: ${meta.updated_at || ""}</small>
-    <ul>${src}</ul>
-    <small>${meta.notes || ""}</small>
-  `;
+function isPregnancyPreset(preset) {
+  return !!(preset && preset.pregnant === true);
 }
 
-function catalogForSpecimen(specimen) {
-  return state.catalog.filter((x) => {
-    const types = (x.specimen_types || []).map((s) => String(s).toLowerCase());
-    return types.includes(specimen) || types.includes("all");
+function isInsulinEnabled() {
+  return !!el("include_ins_curve")?.checked;
+}
+
+function normalizeMaybeNumber(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim().replace(",", ".");
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function setTimesFromPreset() {
+  const preset = getSelectedPreset();
+  if (!preset) return;
+
+  const glycTimes = Array.isArray(preset.times)
+    ? preset.times
+    : Array.isArray(preset.glyc_times)
+      ? preset.glyc_times
+      : [];
+
+  el("glyc_times").value = toCsv(glycTimes);
+
+  if (isInsulinEnabled()) {
+    el("ins_times").value = toCsv(glycTimes);
+  } else {
+    el("ins_times").value = "";
+  }
+
+  applyRefsFromInputs();
+  rebuildValueTables();
+}
+
+function syncInsTimesWithGlyc() {
+  if (!isInsulinEnabled()) {
+    el("ins_times").value = "";
+    return;
+  }
+  const glycTimes = parseCsvInts(el("glyc_times").value);
+  el("ins_times").value = toCsv(glycTimes);
+}
+
+function getGlycRefsForTimes(times) {
+  const preset = getSelectedPreset();
+  const usePregnancyRefs = isPregnancyPreset(preset);
+  const source = usePregnancyRefs ? state.refs.pregnant_glyc_refs : state.refs.default_glyc_refs;
+
+  const out = {};
+  (times || []).forEach((t) => {
+    const r = source[String(t)] || source[t] || { min: 0, max: 0 };
+    out[String(t)] = { min: Number(r.min), max: Number(r.max) };
+  });
+  return out;
+}
+
+function getInsRefsForTimes(times) {
+  const source = state.refs.default_ins_refs || {};
+  const out = {};
+  (times || []).forEach((t) => {
+    const r = source[String(t)] || source[t] || { min: 0, max: 0 };
+    out[String(t)] = { min: Number(r.min), max: Number(r.max) };
+  });
+  return out;
+}
+
+function buildValueTable(tableId, times, refs, existingMap = {}) {
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  if (!tbody) return;
+
+  tbody.innerHTML = "";
+  (times || []).forEach((t) => {
+    const ref = refs[String(t)] || refs[t] || { min: 0, max: 0 };
+    const existing = existingMap[String(t)] ?? existingMap[t];
+    const valueText = existing === null || existing === undefined || Number.isNaN(Number(existing)) ? "" : String(existing);
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${t}</td>
+      <td><input data-time="${t}" class="val-input" placeholder="0" value="${escapeHtml(valueText)}" /></td>
+      <td><input data-time="${t}" class="ref-min" value="${Number(ref.min)}" /></td>
+      <td><input data-time="${t}" class="ref-max" value="${Number(ref.max)}" /></td>
+    `;
+    tbody.appendChild(tr);
   });
 }
 
-function rowTemplate(entry, idx, specimen) {
-  const opts = catalogForSpecimen(specimen)
-    .map((c) => {
-      const selected = String(c.id) === String(entry.antibiotic_id || "") ? "selected" : "";
-      return `<option value="${c.id}" ${selected}>${c.antibiotic_name}</option>`;
-    })
+function tableToSeries(tableId) {
+  const rows = document.querySelectorAll(`#${tableId} tbody tr`);
+  const times = [];
+  const values = [];
+  const refs = {};
+
+  rows.forEach((r) => {
+    const t = Number(r.querySelector(".val-input")?.dataset.time || 0);
+    const rawVal = r.querySelector(".val-input")?.value;
+    const v = normalizeMaybeNumber(rawVal);
+
+    const min = Number(String(r.querySelector(".ref-min")?.value || "0").replace(",", "."));
+    const max = Number(String(r.querySelector(".ref-max")?.value || "0").replace(",", "."));
+
+    times.push(t);
+    values.push(v);
+    refs[String(t)] = {
+      min: Number.isFinite(min) ? min : 0,
+      max: Number.isFinite(max) ? max : 0,
+    };
+  });
+
+  return { times, values, refs };
+}
+
+function applyRefsFromInputs() {
+  const glycTimes = parseCsvInts(el("glyc_times").value);
+  const glycRefs = getGlycRefsForTimes(glycTimes);
+
+  const insEnabled = isInsulinEnabled();
+  syncInsTimesWithGlyc();
+  const insTimes = insEnabled ? parseCsvInts(el("ins_times").value) : [];
+  const insRefs = insEnabled ? getInsRefsForTimes(insTimes) : {};
+
+  state.refs._current_glyc = glycRefs;
+  state.refs._current_ins = insRefs;
+
+  return { glycTimes, glycRefs, insTimes, insRefs };
+}
+
+function rebuildValueTables(existing = {}) {
+  const { glycTimes, glycRefs, insTimes, insRefs } = applyRefsFromInputs();
+
+  buildValueTable("glycTable", glycTimes, glycRefs, existing.glyc || {});
+  buildValueTable("insTable", insTimes, insRefs, existing.ins || {});
+
+  toggleInsulinSections(isInsulinEnabled());
+}
+
+function setPresetOptions() {
+  const sel = el("preset");
+  if (!sel) return;
+
+  const glyPresets = (state.presets || []).filter((p) => p.type === "glyc");
+  sel.innerHTML = glyPresets
+    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`)
     .join("");
 
-  const iCode = String(entry.interpretation || "-").toUpperCase();
-  const interpTxt = interpLabel(iCode);
-
-  return `
-    <tr data-row="${idx}">
-      <td>
-        <select data-role="catalog_id">
-          <option value="">-- seleziona --</option>
-          ${opts}
-        </select>
-        <input data-role="antibiotic_name" value="${entry.antibiotic_name || ""}" placeholder="Nome antibiotico" />
-      </td>
-      <td><input data-role="antibiotic_class" value="${entry.antibiotic_class || ""}" placeholder="Classe" /></td>
-      <td><input data-role="active_ingredient" value="${entry.active_ingredient || ""}" placeholder="Principio attivo" /></td>
-      <td><input data-role="mic" value="${entry.mic || ""}" placeholder="Es. <=1" /></td>
-      <td><input data-role="breakpoint_ref" value="${entry.breakpoint_ref || ""}" placeholder="EUCAST/CLSI" /></td>
-      <td>
-        <select data-role="interpretation">
-          <option value="-" ${iCode === "-" ? "selected" : ""}>-</option>
-          <option value="S" ${iCode === "S" ? "selected" : ""}>S</option>
-          <option value="I" ${iCode === "I" ? "selected" : ""}>I</option>
-          <option value="R" ${iCode === "R" ? "selected" : ""}>R</option>
-        </select>
-      </td>
-      <td>
-        <span data-role="interp_text" class="${interpTagClass(iCode)}">${interpTxt}</span>
-      </td>
-      <td><input data-role="commercial_names" value="${(entry.commercial_names || []).join(", ")}" placeholder="Es. Augmentin, Monuril" /></td>
-      <td>
-        <select data-role="aware_group">
-          <option value="" ${!entry.aware_group ? "selected" : ""}>-</option>
-          <option value="Access" ${entry.aware_group === "Access" ? "selected" : ""}>Access</option>
-          <option value="Watch" ${entry.aware_group === "Watch" ? "selected" : ""}>Watch</option>
-          <option value="Reserve" ${entry.aware_group === "Reserve" ? "selected" : ""}>Reserve</option>
-          <option value="Other" ${entry.aware_group === "Other" ? "selected" : ""}>Other</option>
-        </select>
-      </td>
-      <td><button data-role="remove" class="danger" type="button">X</button></td>
-    </tr>
-  `;
+  const defaultPreset = glyPresets.find((p) => p.id === "glyc3") || glyPresets[0] || null;
+  if (defaultPreset) sel.value = defaultPreset.id;
 }
 
-function getCurrentEntries() {
-  const rows = Array.from(document.querySelectorAll("#abTable tbody tr"));
-  return rows
-    .map((r) => {
-      const csv = r.querySelector('[data-role="commercial_names"]').value || "";
-      const iCode = String(r.querySelector('[data-role="interpretation"]').value || "-").toUpperCase();
-      return {
-        antibiotic_id: Number(r.querySelector('[data-role="catalog_id"]').value || 0) || null,
-        antibiotic_name: r.querySelector('[data-role="antibiotic_name"]').value.trim(),
-        antibiotic_class: r.querySelector('[data-role="antibiotic_class"]').value.trim() || null,
-        active_ingredient: r.querySelector('[data-role="active_ingredient"]').value.trim() || null,
-        mic: r.querySelector('[data-role="mic"]').value.trim() || null,
-        breakpoint_ref: r.querySelector('[data-role="breakpoint_ref"]').value.trim() || null,
-        interpretation: ["S", "I", "R", "-"].includes(iCode) ? iCode : "-",
-        commercial_names: csvToList(csv),
-        aware_group: r.querySelector('[data-role="aware_group"]').value || null,
-      };
-    })
-    .filter((x) => x.antibiotic_name);
-}
+function toggleInsulinSections(show) {
+  const insTimesWrap = el("insTimesWrap");
+  const insSection = el("insSection");
+  const insChartCard = el("insChartCard");
+  const combinedChartCard = el("combinedChartCard");
 
-function updateInterpTag(tr) {
-  const code = tr.querySelector('[data-role="interpretation"]').value || "-";
-  const el = tr.querySelector('[data-role="interp_text"]');
-  el.className = interpTagClass(code);
-  el.textContent = interpLabel(code);
-}
-
-function renderRows(entries) {
-  const specimen = $("specimen_type").value;
-  const tbody = document.querySelector("#abTable tbody");
-  tbody.innerHTML = entries.map((e, i) => rowTemplate(e, i, specimen)).join("");
-
-  tbody.querySelectorAll('button[data-role="remove"]').forEach((b) => {
-    b.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      b.closest("tr")?.remove();
-    });
-  });
-
-  tbody.querySelectorAll('select[data-role="interpretation"]').forEach((sel) => {
-    sel.addEventListener("change", () => {
-      const tr = sel.closest("tr");
-      updateInterpTag(tr);
-    });
-  });
-
-  tbody.querySelectorAll('select[data-role="catalog_id"]').forEach((sel) => {
-    sel.addEventListener("change", () => {
-      const id = Number(sel.value || 0);
-      if (!id) return;
-      const item = state.catalog.find((x) => x.id === id);
-      if (!item) return;
-      const tr = sel.closest("tr");
-      tr.querySelector('[data-role="antibiotic_name"]').value = item.antibiotic_name || "";
-      tr.querySelector('[data-role="antibiotic_class"]').value = item.antibiotic_class || "";
-      tr.querySelector('[data-role="active_ingredient"]').value = item.active_ingredient || "";
-      tr.querySelector('[data-role="breakpoint_ref"]').value = item.breakpoint_ref || "";
-      tr.querySelector('[data-role="commercial_names"]').value = (item.commercial_names || []).join(", ");
-      tr.querySelector('[data-role="aware_group"]').value = item.aware_group || "";
-    });
+  [insTimesWrap, insSection, insChartCard, combinedChartCard].forEach((node) => {
+    if (!node) return;
+    node.classList.toggle("is-hidden", !show);
   });
 }
 
-function resetExamForm() {
-  $("exam_date").value = new Date().toISOString().slice(0, 10);
-  $("acceptance_number").value = "";
-  $("requester_doctor").value = "";
-  $("growth_result").value = "positive";
-  $("microorganism").value = "";
-  $("exam_notes").value = "";
-  $("methodology").value = state.defaultMethodology || "";
-  renderRows([]);
-  $("summary").innerHTML = "";
-}
+function buildPayload() {
+  const patient = state.selectedPatient;
+  if (!patient) throw new Error("Seleziona un paziente.");
 
-function buildExamPayload() {
-  if (!state.selectedPatient) throw new Error("Seleziona un paziente");
-  return {
-    patient_id: state.selectedPatient.id,
-    exam_date: $("exam_date").value || new Date().toISOString().slice(0, 10),
-    acceptance_number: $("acceptance_number").value.trim() || null,
-    requester_doctor: $("requester_doctor").value.trim() || null,
-    specimen_type: $("specimen_type").value,
-    growth_result: $("growth_result").value,
-    microorganism: $("microorganism").value.trim() || null,
-    methodology: $("methodology").value.trim() || null,
-    notes: $("exam_notes").value.trim() || null,
-    antibiogram: getCurrentEntries(),
+  const includeIns = isInsulinEnabled();
+  syncInsTimesWithGlyc();
+
+  const gly = tableToSeries("glycTable");
+  const ins = includeIns ? tableToSeries("insTable") : { times: [], values: [], refs: {} };
+
+  const preset = getSelectedPreset();
+  const pregnant = isPregnancyPreset(preset);
+
+  const payload = {
+    patient_id: Number(patient.id),
+    exam_date: el("exam_date").value || new Date().toISOString().slice(0, 10),
+    requester_doctor: el("requester_doctor").value || null,
+    acceptance_number: el("acceptance_number").value || null,
+
+    curve_mode: includeIns ? "combined" : "glyc",
+    include_insulin: includeIns,
+    pregnant_mode: pregnant,
+    glucose_load_g: Number(el("glucose_load_g").value || 75),
+
+    glyc_unit: el("glyc_unit").value || "mg/dL",
+    ins_unit: el("ins_unit").value || "µUI/mL",
+
+    glyc_times: gly.times,
+    glyc_values: gly.values,
+    glyc_refs: gly.refs,
+
+    ins_times: includeIns ? ins.times : [],
+    ins_values: includeIns ? ins.values : [],
+    ins_refs: includeIns ? ins.refs : {},
+
+    methodology: JSON.stringify({
+      glyc: el("methodology_glyc").value || null,
+      ins: includeIns ? (el("methodology_ins").value || null) : null,
+    }),
+
+    notes: el("exam_notes").value || null,
   };
+
+  // Sempre stessa struttura temporale se insulina attiva
+  if (includeIns) {
+    payload.ins_times = [...payload.glyc_times];
+  }
+
+  return payload;
 }
 
-function liTag(it) {
-  const micPart = it.mic ? `MIC ${it.mic}` : "MIC n/d";
-  const comm = it.commercial_names?.length ? ` - <em>${it.commercial_names.join(", ")}</em>` : "";
-  return `<li><strong>${it.antibiotic_name}</strong> (${micPart})${comm}</li>`;
+function severityClass(overall) {
+  if (overall === "danger") return "danger";
+  if (overall === "warning") return "warning";
+  return "ok";
 }
 
-function renderSummary(interpretation) {
-  const el = $("summary");
-  if (!interpretation) {
-    el.innerHTML = "";
+function renderSummary(interp) {
+  const box = el("summary");
+  if (!box) return;
+
+  if (!interp) {
+    box.className = "summary";
+    box.innerHTML = "Nessuna interpretazione disponibile.";
     return;
   }
 
-  const firstChoice = interpretation.first_choice;
-  const patterns = interpretation.resistance_patterns || [];
-  const recommended = interpretation.recommended || [];
+  const details = interp.details || {};
+  const payload = state.lastPayload || {};
+  const includeIns = payload.include_insulin === true || payload.curve_mode === "combined";
 
-  el.innerHTML = `
-    <h3>Interpretazione diagnostica</h3>
-    <p>${interpretation.summary || ""}</p>
+  const glyInt = details.glycemic_interpretation ? `<li><strong>Glicemia:</strong> ${escapeHtml(details.glycemic_interpretation)}</li>` : "";
+  const insInt = includeIns && details.insulin_interpretation
+    ? `<li><strong>Insulina:</strong> ${escapeHtml(details.insulin_interpretation)}</li>`
+    : "";
 
-    ${
-      firstChoice
-        ? `<p><strong>Prima scelta suggerita:</strong> ${firstChoice.antibiotic_name || "-"} ${
-            firstChoice.commercial_names?.length ? `(<em>${firstChoice.commercial_names.join(", ")}</em>)` : ""
-          }</p>`
-        : `<p><strong>Prima scelta suggerita:</strong> Nessuna (assenza di S nel pannello)</p>`
-    }
-
-    <div class="summary-grid">
-      <div>
-        <h4>Sensibili (S)</h4>
-        <ul>${(interpretation.sensitive || []).map(liTag).join("") || "<li>Nessuno</li>"}</ul>
-      </div>
-      <div>
-        <h4>Intermedi (I)</h4>
-        <ul>${(interpretation.intermediate || []).map(liTag).join("") || "<li>Nessuno</li>"}</ul>
-      </div>
-      <div>
-        <h4>Resistenti (R)</h4>
-        <ul>${(interpretation.resistant || []).map(liTag).join("") || "<li>Nessuno</li>"}</ul>
-      </div>
-      <div>
-        <h4>Consigliabili (solo S)</h4>
-        <ul>${recommended.map(liTag).join("") || "<li>Nessuno</li>"}</ul>
-      </div>
-    </div>
-
-    ${
-      patterns.length
-        ? `<div class="warn-box"><strong>Pattern di resistenza:</strong><ul>${patterns
-            .map((w) => `<li>${w}</li>`)
-            .join("")}</ul></div>`
-        : ""
-    }
-
-    ${
-      (interpretation.warnings || []).length
-        ? `<div class="warn-box"><strong>Avvertenze cliniche:</strong><ul>${interpretation.warnings
-            .map((w) => `<li>${w}</li>`)
-            .join("")}</ul></div>`
-        : ""
-    }
+  box.className = `summary ${severityClass(interp.overall_status)}`;
+  box.innerHTML = `
+    <strong>Esito sintetico:</strong> ${escapeHtml(interp.summary || "-")}
+    <ul>
+      ${glyInt}
+      ${insInt}
+    </ul>
   `;
 }
 
-function selectExam(exam) {
-  state.selectedExamId = exam.id;
-  $("exam_date").value = exam.exam_date || "";
-  $("acceptance_number").value = exam.acceptance_number || "";
-  $("requester_doctor").value = exam.requester_doctor || "";
-  $("specimen_type").value = exam.specimen_type || state.specimenTypes[0]?.id || "urine";
-  $("growth_result").value = exam.growth_result || "positive";
-  $("microorganism").value = exam.microorganism || "";
-  $("methodology").value = exam.methodology || "";
-  $("exam_notes").value = exam.notes || "";
-  renderRows(exam.antibiogram || []);
-
-  state.lastPayload = {
-    patient_id: exam.patient_id,
-    exam_date: exam.exam_date,
-    acceptance_number: exam.acceptance_number,
-    requester_doctor: exam.requester_doctor,
-    specimen_type: exam.specimen_type,
-    growth_result: exam.growth_result,
-    microorganism: exam.microorganism,
-    methodology: exam.methodology,
-    notes: exam.notes,
-    antibiogram: exam.antibiogram || [],
-  };
-  state.interpretation = exam.interpretation || null;
-  renderSummary(state.interpretation);
+async function previewInterpretation() {
+  const payload = buildPayload();
+  state.lastPayload = payload;
+  const interp = await api.previewExam(payload);
+  state.interpretation = interp;
+  renderSummary(interp);
+  renderCharts(payload);
 }
 
-export async function refreshCatalogForCurrentSpecimen() {
-  const specimen = $("specimen_type").value;
-  state.catalog = await api.listCatalog({ specimen });
-  const entries = getCurrentEntries();
-  renderRows(entries);
+async function saveExam() {
+  const payload = buildPayload();
+  state.lastPayload = payload;
+  const saved = await api.saveExam(payload);
+  state.selectedExamId = saved.id;
+  state.interpretation = saved.interpretation;
+
+  renderSummary(saved.interpretation);
+  renderCharts(payload);
+  await refreshExamHistory();
+  alert(`Esame salvato (ID ${saved.id})`);
+}
+
+function chooseBestPresetForExam(exam) {
+  const exTimes = JSON.stringify((exam?.glyc_times || []).map(Number));
+  const exPreg = !!exam?.pregnant_mode;
+
+  const glyPresets = (state.presets || []).filter((p) => p.type === "glyc");
+  const exact = glyPresets.find((p) => JSON.stringify((p.times || []).map(Number)) === exTimes && !!p.pregnant === exPreg);
+  if (exact) return exact;
+
+  const sameTimes = glyPresets.find((p) => JSON.stringify((p.times || []).map(Number)) === exTimes);
+  return sameTimes || null;
+}
+
+function mapValuesByTime(times, values) {
+  const out = {};
+  (times || []).forEach((t, i) => {
+    out[String(t)] = values?.[i] ?? null;
+  });
+  return out;
+}
+
+async function loadExam(examId) {
+  const exam = await api.getExam(examId);
+  state.selectedExamId = exam.id;
+
+  el("exam_date").value = String(exam.exam_date || "").slice(0, 10);
+  el("requester_doctor").value = exam.requester_doctor || "";
+  el("acceptance_number").value = exam.acceptance_number || "";
+  el("glucose_load_g").value = Number(exam.glucose_load_g ?? 75);
+  el("glyc_unit").value = exam.glyc_unit || "mg/dL";
+  el("ins_unit").value = exam.ins_unit || "µUI/mL";
+  el("exam_notes").value = exam.notes || "";
+
+  const hasIns = exam.include_insulin === true || exam.curve_mode === "combined" || ((exam.ins_times || []).length > 0);
+  el("include_ins_curve").checked = hasIns;
+
+  const p = chooseBestPresetForExam(exam);
+  if (p) {
+    el("preset").value = p.id;
+  }
+
+  el("glyc_times").value = toCsv(exam.glyc_times || []);
+  if (hasIns) {
+    el("ins_times").value = toCsv(exam.ins_times?.length ? exam.ins_times : exam.glyc_times || []);
+  } else {
+    el("ins_times").value = "";
+  }
+
+  const method = (() => {
+    try {
+      return exam.methodology ? JSON.parse(exam.methodology) : {};
+    } catch {
+      return {};
+    }
+  })();
+
+  el("methodology_glyc").value = method.glyc || "";
+  el("methodology_ins").value = method.ins || "";
+
+  const glycValues = mapValuesByTime(exam.glyc_times || [], exam.glyc_values || []);
+  const insValues = mapValuesByTime(exam.ins_times || [], exam.ins_values || []);
+
+  rebuildValueTables({
+    glyc: glycValues,
+    ins: insValues,
+  });
+
+  state.lastPayload = {
+    ...exam,
+    include_insulin: hasIns,
+  };
+  state.interpretation = exam.interpretation || null;
+
+  renderSummary(state.interpretation);
+  renderCharts(state.lastPayload);
 }
 
 export async function refreshExamHistory() {
-  const box = $("examHistory");
+  const box = el("examHistory");
+  if (!box) return;
+
   if (!state.selectedPatient) {
-    box.innerHTML = '<div class="muted">Nessun paziente selezionato</div>';
+    box.innerHTML = '<div class="list-item"><small>Seleziona un paziente.</small></div>';
     return;
   }
 
   const rows = await api.listExams(state.selectedPatient.id);
   if (!rows.length) {
-    box.innerHTML = '<div class="muted">Nessun esame salvato per questo paziente</div>';
+    box.innerHTML = '<div class="list-item"><small>Nessun esame presente.</small></div>';
     return;
   }
 
   box.innerHTML = rows
-    .map(
-      (r) => `
-    <div class="card-item">
-      <div>
-        <strong>${r.exam_date} • ${specimenLabel(r.specimen_type)}</strong><br/>
-        <small>${r.microorganism || "Microrganismo n/d"} • ${r.interpretation_summary || "-"}</small>
+    .map((r) => {
+      const modeLabel = r.curve_mode === "combined"
+        ? "Glicemica + Insulinemica"
+        : "Glicemica";
+
+      return `
+      <div class="list-item">
+        <div>
+          <strong>#${r.id}</strong> — ${escapeHtml(formatDate(r.exam_date))}
+          <div class="muted">${escapeHtml(modeLabel)} • ${escapeHtml(r.interpretation_summary || "-")}</div>
+        </div>
+        <div class="row">
+          <button data-load-exam="${r.id}">Apri</button>
+          <button class="danger" data-del-exam="${r.id}">Elimina</button>
+        </div>
       </div>
-      <div class="row">
-        <button data-action="open" data-id="${r.id}">Apri</button>
-        <button data-action="delete" data-id="${r.id}" class="danger">Elimina</button>
-      </div>
-    </div>
-  `
-    )
+    `;
+    })
     .join("");
 
-  box.querySelectorAll("button[data-action]").forEach((btn) => {
+  box.querySelectorAll("[data-load-exam]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const id = Number(btn.dataset.id);
-      if (btn.dataset.action === "open") {
-        const exam = await api.getExam(id);
-        selectExam(exam);
-      } else if (btn.dataset.action === "delete") {
-        if (!confirm("Eliminare questo esame?")) return;
-        await api.deleteExam(id);
+      try {
+        await loadExam(Number(btn.dataset.loadExam));
+      } catch (e) {
+        alert(e.message || "Errore caricamento esame");
+      }
+    });
+  });
+
+  box.querySelectorAll("[data-del-exam]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Eliminare questo esame?")) return;
+      try {
+        await api.deleteExam(Number(btn.dataset.delExam));
+        if (state.selectedExamId === Number(btn.dataset.delExam)) {
+          state.selectedExamId = null;
+        }
         await refreshExamHistory();
+      } catch (e) {
+        alert(e.message || "Errore eliminazione esame");
       }
     });
   });
 }
 
-export function initPresetsAndRefs(presets) {
-  state.specimenTypes = presets.specimen_types || [];
-  state.catalog = presets.catalog || [];
-  state.defaultPanels = presets.default_panels || {};
-  state.presetsMeta = presets.references_metadata || null;
-  state.defaultMethodology = presets.default_methodologies?.mic || "";
+export function initPresetsAndRefs(presetsPayload) {
+  state.presets = presetsPayload?.presets || [];
+  state.refs.default_glyc_refs = presetsPayload?.default_glyc_refs || {};
+  state.refs.pregnant_glyc_refs = presetsPayload?.pregnant_glyc_refs || {};
+  state.refs.default_ins_refs = presetsPayload?.default_ins_refs || {};
+  state.refs.metadata = presetsPayload?.references_metadata || null;
 
-  const specSel = $("specimen_type");
-  specSel.innerHTML = state.specimenTypes.map((s) => `<option value="${s.id}">${s.label}</option>`).join("");
-  if (state.specimenTypes.length) specSel.value = state.specimenTypes[0].id;
+  setPresetOptions();
 
-  $("methodology").value = state.defaultMethodology;
-  renderRefsSource();
+  const methods = presetsPayload?.default_methodologies || {};
+  const mg = el("methodology_glyc");
+  const mi = el("methodology_ins");
+  if (mg && methods.glyc) mg.value = methods.glyc;
+  if (mi && methods.ins) mi.value = methods.ins;
+
+  const refBox = el("refsSourceInfo");
+  if (refBox && state.refs.metadata) {
+    const m = state.refs.metadata;
+    const srcList = Array.isArray(m.sources) ? m.sources.slice(0, 6) : [];
+    refBox.innerHTML = `
+      <div class="ref-box">
+        <strong>Profilo riferimenti:</strong> ${escapeHtml(m.profile_name || "-")}<br/>
+        <small>Dataset: ${escapeHtml(m.dataset_name || "-")} • Versione: ${escapeHtml(m.dataset_version || "-")} • Agg.: ${escapeHtml(m.updated_at || "-")}</small>
+        ${m.notes ? `<p class="muted">${escapeHtml(m.notes)}</p>` : ""}
+        ${srcList.length ? `<small>Fonti principali:</small><ul>${srcList.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>` : ""}
+      </div>
+    `;
+  }
+
+  el("exam_date").value = new Date().toISOString().slice(0, 10);
+  el("include_ins_curve").checked = false;
+
+  setTimesFromPreset();
 }
 
 export function bindExamUI() {
-  $("exam_date").value = new Date().toISOString().slice(0, 10);
-  $("methodology").value = state.defaultMethodology || "";
-
-  $("btnLoadPanel").addEventListener("click", async () => {
-    const spec = $("specimen_type").value;
-    await refreshCatalogForCurrentSpecimen();
-    const panel = (state.defaultPanels?.[spec] || []).map((p) => ({
-      antibiotic_id: p.id,
-      antibiotic_name: p.antibiotic_name,
-      antibiotic_class: p.antibiotic_class || "",
-      active_ingredient: p.active_ingredient || "",
-      mic: "",
-      breakpoint_ref: p.breakpoint_ref || "",
-      interpretation: "-",
-      commercial_names: p.commercial_names || [],
-      aware_group: p.aware_group || "",
-    }));
-    renderRows(panel);
+  el("preset")?.addEventListener("change", () => {
+    setTimesFromPreset();
   });
 
-  $("btnAddRow").addEventListener("click", async () => {
-    await refreshCatalogForCurrentSpecimen();
-    const entries = getCurrentEntries();
-    entries.push({
-      antibiotic_id: null,
-      antibiotic_name: "",
-      antibiotic_class: "",
-      active_ingredient: "",
-      mic: "",
-      breakpoint_ref: "",
-      interpretation: "-",
-      commercial_names: [],
-      aware_group: "",
-    });
-    renderRows(entries);
+  el("include_ins_curve")?.addEventListener("change", () => {
+    syncInsTimesWithGlyc();
+    rebuildValueTables();
+    if (state.lastPayload) {
+      state.lastPayload.include_insulin = isInsulinEnabled();
+      state.lastPayload.curve_mode = isInsulinEnabled() ? "combined" : "glyc";
+      renderCharts(state.lastPayload);
+    }
   });
 
-  $("specimen_type").addEventListener("change", async () => {
-    await refreshCatalogForCurrentSpecimen();
+  el("glyc_times")?.addEventListener("change", () => {
+    syncInsTimesWithGlyc();
+    rebuildValueTables();
   });
 
-  $("btnPreview").addEventListener("click", async () => {
+  el("btnPreview")?.addEventListener("click", async () => {
     try {
-      const payload = buildExamPayload();
+      await previewInterpretation();
+    } catch (e) {
+      alert(e.message || "Errore calcolo interpretazione");
+    }
+  });
+
+  el("btnSaveExam")?.addEventListener("click", async () => {
+    try {
+      await saveExam();
+    } catch (e) {
+      alert(e.message || "Errore salvataggio esame");
+    }
+  });
+
+  el("btnPdf")?.addEventListener("click", async () => {
+    try {
+      // Usa SEMPRE i dati correnti del form (evita referti con dati “stale”)
+      const payload = buildPayload();
       const interp = await api.previewExam(payload);
+
       state.lastPayload = payload;
       state.interpretation = interp;
-      renderSummary(interp);
+
+      renderSummary(interp, payload);
+      renderCharts(payload);
+      await generatePdf(payload, interp);
     } catch (e) {
-      alert("Errore preview: " + e.message);
+      alert(e?.message || "Errore generazione PDF.");
     }
   });
-
-  $("btnSaveExam").addEventListener("click", async () => {
-    try {
-      const payload = buildExamPayload();
-      const row = await api.saveExam(payload);
-      state.selectedExamId = row.id;
-      state.lastPayload = payload;
-      state.interpretation = row.interpretation;
-      renderSummary(row.interpretation);
-      await refreshExamHistory();
-      alert("Esame salvato.");
-    } catch (e) {
-      alert("Errore salvataggio esame: " + e.message);
-    }
-  });
-
-  $("btnResetExam").addEventListener("click", resetExamForm);
 }

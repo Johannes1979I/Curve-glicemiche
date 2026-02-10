@@ -13,7 +13,7 @@ let mode = forceLocal || (!configuredBase && isGithubPages) ? "local" : "remote"
 
 function shouldFallback(err) {
   if (forceLocal) return true;
-  if (configuredBase) return false;
+  if (configuredBase) return false; // se l'utente imposta un backend, non fallback automatico
   if (!err) return false;
   if (err.isNetwork) return true;
   if ([404, 405, 500, 502, 503, 504].includes(Number(err.status))) return true;
@@ -44,13 +44,15 @@ async function requestRemote(url, opts = {}) {
 }
 
 async function exec(url, opts, localFn) {
-  if (mode === "local") return localFn();
+  if (mode === "local") {
+    return localFn();
+  }
   try {
     return await requestRemote(url, opts);
   } catch (err) {
     if (shouldFallback(err)) {
       mode = "local";
-      console.warn("[MicroLab] API remota non disponibile, passo a DB locale browser.");
+      console.warn("[CurveLab] API remota non disponibile, passo a DB locale browser.");
       return localFn();
     }
     throw err;
@@ -64,23 +66,9 @@ export function getApiMode() {
 export const api = {
   health: () => exec("/health", {}, () => localApi.health()),
   getPresets: () => exec("/presets", {}, () => localApi.getPresets()),
-
   getReportSettings: () => exec("/report-settings", {}, () => localApi.getReportSettings()),
   saveReportSettings: (payload) =>
     exec("/report-settings", { method: "PUT", body: JSON.stringify(payload) }, () => localApi.saveReportSettings(payload)),
-
-  listCatalog: ({ search = "", specimen = "", only_enabled = true } = {}) =>
-    exec(
-      `/catalog?search=${encodeURIComponent(search)}&specimen=${encodeURIComponent(specimen)}&only_enabled=${only_enabled ? "true" : "false"}`,
-      {},
-      () => localApi.listCatalog({ search, specimen, only_enabled })
-    ),
-  createCatalogItem: (payload) =>
-    exec("/catalog", { method: "POST", body: JSON.stringify(payload) }, () => localApi.createCatalogItem(payload)),
-  updateCatalogItem: (id, payload) =>
-    exec(`/catalog/${id}`, { method: "PUT", body: JSON.stringify(payload) }, () => localApi.updateCatalogItem(id, payload)),
-  deleteCatalogItem: (id) =>
-    exec(`/catalog/${id}`, { method: "DELETE" }, () => localApi.deleteCatalogItem(id)),
 
   listPatients: (search = "") =>
     exec(`/patients?search=${encodeURIComponent(search)}`, {}, () => localApi.listPatients(search)),

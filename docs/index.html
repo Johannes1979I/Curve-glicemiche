@@ -3,240 +3,197 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MicroLab MIC WebApp</title>
+  <title>CurveLab WebApp</title>
   <link rel="icon" href="./favicon.ico" sizes="any" />
   <link rel="shortcut icon" href="./favicon.ico" />
   <link rel="apple-touch-icon" href="./favicon.ico" />
   <link rel="stylesheet" href="./assets/css/main.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <h1>MicroLab MIC WebApp</h1>
-      <p>Refertazione microbiologica professionale con antibiogramma MIC, archivio pazienti e PDF clinico.</p>
-      <p id="runtimeMode" class="muted"></p>
-    </div>
-    <span class="badge-pro">Layout Pro</span>
+    <h1>CurveLab WebApp</h1>
+    <p>Refertazione curve glicemiche/insulinemiche con archivio pazienti e referto PDF</p>
+    <p id="runtimeMode" class="muted"></p>
   </header>
 
   <main class="layout">
     <section class="panel">
-      <h2>1) Anagrafica pazienti</h2>
+      <h2>1) Pazienti</h2>
       <div class="row">
         <input id="searchPatient" placeholder="Cerca per cognome, nome o CF" />
-        <button id="btnSearchPatient" type="button">Cerca</button>
+        <button id="btnSearchPatient">Cerca</button>
       </div>
-
       <div id="patientsList" class="list"></div>
 
-      <h3>Nuovo / modifica paziente</h3>
+      <h3>Nuovo / Modifica Paziente</h3>
       <form id="patientForm" class="form-grid">
         <input type="hidden" id="patientId" />
-        <label>Cognome *
-          <input id="surname" placeholder="Cognome *" required />
-        </label>
-        <label>Nome *
-          <input id="name" placeholder="Nome *" required />
-        </label>
-        <label>Data nascita
-          <input id="birth_date" type="date" />
-        </label>
-        <label>Sesso
-          <select id="sex">
-            <option value="M">M</option>
-            <option value="F">F</option>
-          </select>
-        </label>
-        <label>Codice fiscale
-          <input id="fiscal_code" placeholder="Codice fiscale" />
-        </label>
-        <label>Telefono
-          <input id="phone" placeholder="Telefono" />
-        </label>
-        <label class="span-2">Email
-          <input id="email" type="email" placeholder="Email" />
-        </label>
-        <label class="span-2">Note
-          <textarea id="patient_notes" rows="3" placeholder="Note anagrafiche"></textarea>
-        </label>
+        <input id="surname" placeholder="Cognome *" required />
+        <input id="name" placeholder="Nome *" required />
+        <input id="birth_date" type="date" />
+        <select id="sex">
+          <option value="M">Maschio</option>
+          <option value="F">Femmina</option>
+        </select>
+        <input id="fiscal_code" placeholder="Codice fiscale" />
+        <input id="phone" placeholder="Telefono" />
+        <input id="email" placeholder="Email" />
+        <textarea id="patient_notes" placeholder="Note paziente"></textarea>
         <div class="row span-2">
           <button type="submit">Salva paziente</button>
-          <button id="btnResetPatient" type="button">Reset</button>
+          <button type="button" id="btnResetPatient">Reset</button>
         </div>
       </form>
     </section>
 
     <section class="panel">
-      <h2>2) Esame microbiologico + antibiogramma MIC</h2>
-      <p class="muted" id="selectedPatientLabel">Nessun paziente selezionato</p>
+      <h2>2) Esame</h2>
+      <p id="selectedPatientLabel" class="muted">Seleziona prima un paziente</p>
 
       <div class="form-grid">
-        <label>Data esame
-          <input id="exam_date" type="date" />
-        </label>
-        <label>N° accettazione
-          <input id="acceptance_number" placeholder="Es. ACC-2026-0001" />
-        </label>
-        <label>Medico richiedente
-          <input id="requester_doctor" placeholder="Dr./Dott.ssa ..." />
-        </label>
-        <label>Campione
-          <select id="specimen_type"></select>
-        </label>
-        <label>Esito crescita
-          <select id="growth_result">
-            <option value="positive">Crescita positiva</option>
-            <option value="mixed">Flora mista</option>
-            <option value="negative">Negativa</option>
+        <label>Data esame <input id="exam_date" type="date" /></label>
+        <label>N° accettazione <input id="acceptance_number" /></label>
+        <label>Medico richiedente <input id="requester_doctor" /></label>
+        <label>Modalità
+          <select id="curve_mode">
+            <option value="glyc">Solo glicemica</option>
+            <option value="ins">Solo insulinemica</option>
+            <option value="combined" selected>Combinata</option>
           </select>
         </label>
-        <label>Microrganismo isolato
-          <input id="microorganism" placeholder="Es. E. coli, S. aureus, ..." />
+        <label>Preset
+          <select id="preset"></select>
         </label>
-        <label class="span-2">Metodica analitica
-          <input id="methodology" placeholder="Es. MIC broth microdilution + interpretazione EUCAST" />
+        <label>Carico glucosio (g)
+          <input id="glucose_load_g" type="number" min="25" max="100" value="75" />
+        </label>
+        <label>Unità glicemia
+          <select id="glyc_unit">
+            <option>mg/dL</option>
+            <option>mmol/L</option>
+          </select>
+        </label>
+        <label>Unità insulina
+          <select id="ins_unit">
+            <option>µUI/mL</option>
+            <option>pmol/L</option>
+          </select>
+        </label>
+        <div class="span-2 preset-hint muted">Per la gravidanza usa il preset <strong>Curva glicemica 3 punti in gravidanza</strong>.</div>
+        <label>Tempi glicemica (csv)
+          <input id="glyc_times" placeholder="0,30,60,90,120" />
+        </label>
+        <label>Tempi insulinemica (csv)
+          <input id="ins_times" placeholder="0,30,60,90,120" />
         </label>
       </div>
 
-      <div class="refbox" id="refsSourceInfo"></div>
+      <div class="ref-meta-box" id="refsSourceInfo"></div>
 
-      <div class="row">
-        <button id="btnLoadPanel" type="button">Carica pannello standard per campione</button>
-        <button id="btnAddRow" type="button">Aggiungi antibiotico manualmente</button>
-      </div>
-
-      <div class="table-wrap">
-        <table id="abTable">
-          <thead>
-            <tr>
-              <th>Antibiotico</th>
-              <th>Classe</th>
-              <th>Principio attivo</th>
-              <th>MIC</th>
-              <th>Breakpoint</th>
-              <th>S/I/R</th>
-              <th>Interpretazione</th>
-              <th>Nomi commerciali</th>
-              <th>AWaRe</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+      <div class="tables">
+        <div>
+          <h3>Valori glicemia</h3>
+          <table id="glycTable">
+            <thead><tr><th>Tempo</th><th>Valore</th><th>Ref min</th><th>Ref max</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <label class="method-label">Metodica glicemia
+            <input id="methodology_glyc" placeholder="Es. Metodo enzimatico (Esochinasi/G6PDH) - Fotometria UV" />
+          </label>
+        </div>
+        <div>
+          <h3>Valori insulina</h3>
+          <table id="insTable">
+            <thead><tr><th>Tempo</th><th>Valore</th><th>Ref min</th><th>Ref max</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <label class="method-label">Metodica insulina
+            <input id="methodology_ins" placeholder="Es. CLIA / ECLIA / Chemiluminescenza" />
+          </label>
+        </div>
       </div>
 
       <label>Note referto
-        <textarea id="exam_notes" placeholder="Note opzionali (anamnesi, commenti tecnico-clinici)"></textarea>
+        <textarea id="exam_notes" placeholder="Note opzionali"></textarea>
       </label>
 
       <div class="row">
         <button id="btnPreview" type="button">Calcola interpretazione</button>
         <button id="btnSaveExam" type="button">Salva esame nel DB</button>
-        <button id="btnResetExam" type="button">Reset esame</button>
       </div>
     </section>
   </main>
 
   <section class="panel full">
-    <h2>3) Catalogo antibiotici (aggiungi / rimuovi)</h2>
-    <div class="row">
-      <input id="cat_search" placeholder="Cerca antibiotico..." />
-      <button id="btnSearchCatalog" type="button">Cerca</button>
-    </div>
-
-    <form id="catalogForm" class="form-grid">
-      <label>Nome antibiotico *
-        <input id="cat_antibiotic_name" required placeholder="Es. Fosfomicina" />
-      </label>
-      <label>Classe antibiotica
-        <input id="cat_antibiotic_class" placeholder="Es. Fosfonati / Fluorochinoloni" />
-      </label>
-      <label>Principio attivo
-        <input id="cat_active_ingredient" placeholder="Es. fosfomycin trometamol" />
-      </label>
-      <label>Breakpoint riferimento
-        <input id="cat_breakpoint_ref" placeholder="Es. EUCAST 2026 / CLSI" />
-      </label>
-      <label>Tipi campione (csv)
-        <input id="cat_specimen_types" placeholder="urine,feci,orofaringeo" />
-      </label>
-      <label>Nomi commerciali (csv)
-        <input id="cat_commercial_names" placeholder="Monuril,Monurol" />
-      </label>
-      <label>Classe AWaRe
-        <select id="cat_aware_group">
-          <option value="">-</option>
-          <option value="Access">Access</option>
-          <option value="Watch">Watch</option>
-          <option value="Reserve">Reserve</option>
-          <option value="Other">Other</option>
-        </select>
-      </label>
-      <div class="row span-2">
-        <button type="submit">Aggiungi antibiotico</button>
-      </div>
-    </form>
-
-    <div id="catalogList" class="list"></div>
-  </section>
-
-  <section class="panel full">
-    <h2>4) Interpretazione</h2>
-    <div id="summary" class="summary"></div>
-  </section>
-
-  <section class="panel full">
-    <h2>5) Referto PDF</h2>
+    <h2>3) Referto PDF e risultati</h2>
 
     <div class="report-settings-grid">
       <label>Titolo referto
-        <input id="report_title" placeholder="Referto Esame Microbiologico con MIC" />
+        <input id="report_title" placeholder="Referto Curva da Carico Orale di Glucosio" />
       </label>
-      <label>Intestazione riga 1
-        <input id="header_line1" placeholder="Es. Centro Polispecialistico ..." />
+      <label>Header riga 1
+        <input id="header_line1" />
       </label>
-      <label>Intestazione riga 2
-        <input id="header_line2" placeholder="Es. Laboratorio Analisi" />
+      <label>Header riga 2
+        <input id="header_line2" />
       </label>
-      <label>Intestazione riga 3
-        <input id="header_line3" placeholder="Es. Via..., Tel..." />
-      </label>
-
-      <label class="inline-check">
-        <input id="include_interpretation_pdf" type="checkbox" checked />
-        Includi interpretazione diagnostica nel PDF
+      <label>Header riga 3
+        <input id="header_line3" />
       </label>
 
-      <label class="inline-check">
-        <input id="include_commercial_names_pdf" type="checkbox" checked />
-        Includi nomi commerciali nel PDF
-      </label>
-
-      <label>Logo intestazione
-        <input id="header_logo_file" type="file" accept="image/*" />
-      </label>
-      <div class="row">
-        <button id="btnRemoveLogo" type="button">Rimuovi logo</button>
+      <div class="logo-upload-wrap span-2">
+        <label class="logo-upload-label">Logo/intestazione (opzionale)</label>
+        <div class="row">
+          <input type="file" id="header_logo_file" accept="image/*" />
+          <button type="button" id="btnRemoveLogo">Rimuovi logo</button>
+        </div>
+        <div id="logoPreviewBox" class="logo-preview muted">Nessun logo impostato</div>
       </div>
-      <div id="logoPreviewBox" class="logo-preview"></div>
+
+      <label class="toggle">
+        <input id="include_interpretation_pdf" type="checkbox" checked />
+        <span class="toggle-slider" aria-hidden="true"></span>
+        <span class="toggle-label">Includi interpretazione nel referto</span>
+      </label>
+      <label class="toggle">
+        <input id="merge_charts_pdf" type="checkbox" checked />
+        <span class="toggle-slider" aria-hidden="true"></span>
+        <span class="toggle-label">Unisci glicemia + insulina in un unico grafico nel referto</span>
+      </label>
 
       <div class="row span-2">
-        <button id="btnSaveReportSettings" type="button">Salva impostazioni come default</button>
-        <span id="reportSettingsStatus" class="muted"></span>
+        <button id="btnSaveReportSettings" type="button">Salva impostazioni predefinite referto</button>
+        <small id="reportSettingsStatus" class="muted"></small>
       </div>
     </div>
 
-    <div class="row">
-      <button id="btnPdf" type="button">Genera referto PDF</button>
+    <div id="summary" class="summary"></div>
+    <div class="row"><button id="btnPdf" type="button">Genera PDF referto</button></div>
+
+    <div class="charts">
+      <div class="chart-card">
+        <h3>Curva glicemica + limiti</h3>
+        <canvas id="glycChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Curva insulinemica + limiti</h3>
+        <canvas id="insChart"></canvas>
+      </div>
+      <div class="chart-card span-2">
+        <h3>Grafico combinato (glicemia + insulina)</h3>
+        <canvas id="combinedChart"></canvas>
+      </div>
     </div>
   </section>
 
   <section class="panel full">
-    <h2>Storico esami paziente selezionato</h2>
+    <h2>4) Storico esami paziente selezionato</h2>
     <div id="examHistory" class="list"></div>
   </section>
 
+  <script src="./assets/js/config.js"></script>
   <script type="module" src="./assets/js/app.js"></script>
 </body>
 </html>

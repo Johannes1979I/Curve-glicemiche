@@ -11,7 +11,7 @@ router = APIRouter(prefix="/report-settings", tags=["report-settings"])
 
 @router.get("", response_model=schemas.ReportSettingsOut)
 def get_report_settings(db: Session = Depends(get_db)):
-    row = report_srv.get_or_create(db)
+    row = report_srv.get_or_create_settings(db)
     return report_srv.row_to_payload(row)
 
 
