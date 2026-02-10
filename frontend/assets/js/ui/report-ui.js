@@ -174,17 +174,26 @@ function parseMethodologyField(payload) {
 
 function buildRows(times = [], values = [], refs = {}) {
   return times.map((t, i) => {
-    const value = Number(values?.[i] ?? 0);
+    const raw = values?.[i];
+    const hasValue = !(raw === null || raw === undefined || String(raw).trim?.() === "");
+    const value = hasValue ? Number(String(raw).replace(",", ".")) : null;
+
     const ref = refs?.[String(t)] || refs?.[t] || { min: 0, max: 0 };
-    let status = "N";
-    if (value < Number(ref.min)) status = "B";
-    else if (value > Number(ref.max)) status = "A";
+    const refMin = Number(ref.min ?? 0);
+    const refMax = Number(ref.max ?? 0);
+
+    let status = "-";
+    if (hasValue && Number.isFinite(value)) {
+      status = "N";
+      if (value < refMin) status = "B";
+      else if (value > refMax) status = "A";
+    }
 
     return {
       time: t,
-      value,
-      refMin: Number(ref.min ?? 0),
-      refMax: Number(ref.max ?? 0),
+      value: Number.isFinite(value) ? value : null,
+      refMin: Number.isFinite(refMin) ? refMin : 0,
+      refMax: Number.isFinite(refMax) ? refMax : 0,
       status,
     };
   });
@@ -410,8 +419,9 @@ function drawMiniTable(doc, y, title, unit, rows, methodology, settings, pageWid
       doc.rect(x0, y, tableW, rowH, "F");
     }
 
-    const statusTxt = r.status === "N" ? "OK" : r.status === "A" ? "ALTO" : "BASSO";
-    const vals = [`${r.time}'`, `${r.value.toFixed(1)}`, `${r.refMin.toFixed(1)}`, `${r.refMax.toFixed(1)}`, statusTxt];
+    const statusTxt = r.status === "N" ? "OK" : r.status === "A" ? "ALTO" : r.status === "B" ? "BASSO" : "-";
+    const valStr = r.value === null || r.value === undefined ? "-" : r.value.toFixed(1);
+    const vals = [`${r.time}'`, valStr, `${r.refMin.toFixed(1)}`, `${r.refMax.toFixed(1)}`, statusTxt];
 
     x = x0 + 1.8;
     vals.forEach((v, i) => {
@@ -564,9 +574,15 @@ function addFooterOnAllPages(doc, margin) {
   }
 }
 
+function shouldShowInsulinInReport(payload) {
+  return !!(
+    payload?.include_insulin === true || payload?.curve_mode === "combined"
+  );
+}
+
 function chartImagesForReport(payload, settings) {
-  const mode = payload.curve_mode;
   const merge = !!settings.merge_charts_pdf;
+  const hasIns = shouldShowInsulinInReport(payload);
 
   const g = $("glycChart");
   const i = $("insChart");
@@ -574,17 +590,18 @@ function chartImagesForReport(payload, settings) {
 
   const out = [];
 
-  if (merge && mode === "combined" && c) {
+  if (merge && hasIns && c) {
     const img = canvasToImage(c, { square: true, squareSize: 1200 });
     if (img) out.push({ title: "Grafico combinato glicemia + insulina", image: img });
     return out;
   }
 
-  if ((mode === "glyc" || mode === "combined") && g) {
+  if (g) {
     const img = canvasToImage(g, { square: true, squareSize: 1200 });
     if (img) out.push({ title: "Curva glicemica", image: img });
   }
-  if ((mode === "ins" || mode === "combined") && i) {
+
+  if (hasIns && i) {
     const img = canvasToImage(i, { square: true, squareSize: 1200 });
     if (img) out.push({ title: "Curva insulinemica", image: img });
   }
@@ -650,6 +667,10 @@ function generatePdf() {
   right.forEach((line, idx) => doc.text(line, margin + 95, y + idx * 5.2));
   y += 18;
 
+  const hasIns = shouldShowInsulinInReport(payload);
+  const showG = Array.isArray(payload.glyc_times) && payload.glyc_times.length > 0;
+  const showI = hasIns && Array.isArray(payload.ins_times) && payload.ins_times.length > 0;
+
   y = ensureSpace(doc, y, 20, settings, pageWidth, pageHeight, margin);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10.5);
@@ -657,7 +678,7 @@ function generatePdf() {
   y += 5.5;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9.5);
-  doc.text(`Tipo curva: ${payload.curve_mode === "combined" ? "Combinata" : payload.curve_mode === "glyc" ? "Glicemica" : "Insulinemica"}`, margin, y);
+  doc.text(`Tipo curva: ${showI ? "Glicemica + Insulinemica" : "Glicemica"}`, margin, y);
   doc.text(`Carico glucosio: ${payload.glucose_load_g || 75} g`, margin + 70, y);
   doc.text(`Modalità gravidanza: ${payload.pregnant_mode ? "SÌ" : "NO"}`, margin + 125, y);
   y += 8;
@@ -676,9 +697,6 @@ function generatePdf() {
   }
 
   y = drawSectionTitle(doc, "Risultati analitici", y, margin, pageWidth, settings, pageHeight);
-
-  const showG = payload.curve_mode === "glyc" || payload.curve_mode === "combined";
-  const showI = payload.curve_mode === "ins" || payload.curve_mode === "combined";
 
   if (showG) {
     y = drawMiniTable(
@@ -710,13 +728,10 @@ function generatePdf() {
     );
   }
 
-
-// Grafici subito dopo i risultati analitici:
-// in questo modo restano nella stessa pagina dei dati, evitando sovrapposizioni.
-const charts = chartImagesForReport(payload, settings);
-if (charts.length) {
-  y = renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, margin);
-}
+  const charts = chartImagesForReport(payload, settings);
+  if (charts.length) {
+    y = renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, margin);
+  }
 
   if (settings.include_interpretation_pdf) {
     y = drawSectionTitle(doc, "Interpretazione", y, margin, pageWidth, settings, pageHeight);
@@ -727,7 +742,7 @@ if (charts.length) {
     const chunks = [
       state.interpretation?.summary || "",
       details.glycemic_interpretation ? `Glicemia: ${details.glycemic_interpretation}` : "",
-      details.insulin_interpretation ? `Insulina: ${details.insulin_interpretation}` : "",
+      showI && details.insulin_interpretation ? `Insulina: ${details.insulin_interpretation}` : "",
     ].filter(Boolean);
 
     for (const ch of chunks) {

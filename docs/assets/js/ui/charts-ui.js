@@ -1,308 +1,187 @@
 import { state } from "../state.js";
 
-const CHART_COLORS = {
-  patientBlue: "rgb(37, 99, 235)",
-  patientBlueSoft: "rgba(59, 130, 246, 0.95)",
-  refLine: "rgba(156, 163, 175, 0.95)",
-  glycRange: "rgba(34, 197, 94, 0.20)",
-  insRange: "rgba(250, 204, 21, 0.20)",
-};
-
-function chartWrapFor(canvasId) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return null;
-  return canvas.closest(".chart-wrap") || canvas.closest(".chart-card");
+function killChart(instance) {
+  if (instance && typeof instance.destroy === "function") instance.destroy();
 }
 
-function hideOrShowChart(canvasId, shouldShow) {
-  const wrap = chartWrapFor(canvasId);
-  if (!wrap) return;
-  wrap.style.display = shouldShow ? "block" : "none";
+function getCanvasContext(id) {
+  const c = document.getElementById(id);
+  return c ? c.getContext("2d") : null;
 }
 
-function destroyChart(refName) {
-  if (state.charts[refName]) {
-    state.charts[refName].destroy();
-    state.charts[refName] = null;
-  }
+function lineDataset(label, data, color) {
+  return {
+    label,
+    data,
+    borderColor: color,
+    backgroundColor: color,
+    pointRadius: 3,
+    tension: 0.35,
+    borderWidth: 2,
+    fill: false,
+  };
 }
 
-function mkPairs(times, values) {
-  return (times || []).map((t, i) => ({ x: Number(t), y: Number(values?.[i] ?? 0) }));
+function areaDataset(label, dataTop, dataBottom, color) {
+  return {
+    label,
+    data: dataTop,
+    borderColor: "rgba(0,0,0,0)",
+    backgroundColor: color,
+    pointRadius: 0,
+    tension: 0.35,
+    fill: { target: "-1" },
+    order: -10,
+  };
 }
 
-function mkRefPairs(times, refs, key) {
-  return (times || []).map((t) => ({ x: Number(t), y: Number((refs?.[String(t)] || refs?.[t] || {})[key] ?? 0) }));
+function shouldShowInsulin(payload) {
+  return !!(
+    payload?.include_insulin === true || payload?.curve_mode === "combined"
+  );
 }
 
-function computeBounds(seriesArray) {
-  const vals = [];
-  for (const serie of seriesArray) {
-    for (const p of serie || []) {
-      const v = Number(p?.y);
-      if (Number.isFinite(v)) vals.push(v);
+function setChartCardsVisibility(showIns) {
+  const insCard = document.getElementById("insChartCard");
+  const combCard = document.getElementById("combinedChartCard");
+  if (insCard) insCard.classList.toggle("is-hidden", !showIns);
+  if (combCard) combCard.classList.toggle("is-hidden", !showIns);
+}
+
+function toPoints(times, values) {
+  return (times || []).map((t, i) => {
+    const raw = values?.[i];
+    if (raw === null || raw === undefined || String(raw).trim?.() === "") {
+      return { x: Number(t), y: null };
     }
-  }
-  if (!vals.length) return { min: 0, max: 100 };
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  const pad = Math.max(8, Math.ceil((max - min) * 0.12));
-  return { min: Math.max(0, Math.floor(min - pad)), max: Math.ceil(max + pad) };
+    const y = Number(String(raw).replace(",", "."));
+    return { x: Number(t), y: Number.isFinite(y) ? y : null };
+  });
 }
 
-function commonOptions(yLabel, min, max) {
+function refsToPoints(times, refs, key) {
+  return (times || []).map((t) => ({ x: Number(t), y: Number(refs?.[String(t)]?.[key] ?? 0) }));
+}
+
+function buildChartOptions(unitY) {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    interaction: { mode: "index", intersect: false },
+    animation: false,
     plugins: {
-      legend: { position: "bottom" },
-      tooltip: { enabled: true },
+      legend: { position: "top" },
+      tooltip: { mode: "nearest", intersect: false },
     },
     scales: {
       x: {
         type: "linear",
         title: { display: true, text: "Tempo (min)" },
-        ticks: {
-          callback: (v) => `${v}'`,
-        },
       },
       y: {
-        beginAtZero: false,
-        min,
-        max,
-        title: { display: true, text: yLabel },
+        title: { display: true, text: unitY || "Valore" },
       },
     },
   };
 }
 
-function datasetBase() {
-  return {
-    borderWidth: 2,
-    tension: 0.45,
-    cubicInterpolationMode: "monotone",
-    pointRadius: 3,
-    pointHoverRadius: 5,
-    spanGaps: true,
-  };
-}
+function renderSingle(idCanvas, times, values, refs, unit, labelSerie, areaColor, lineColor) {
+  const ctx = getCanvasContext(idCanvas);
+  if (!ctx) return null;
 
-function renderSingle(canvasId, label, unit, times, values, refs, chartRef) {
-  destroyChart(chartRef);
+  const pointsVal = toPoints(times, values);
+  const refMin = refsToPoints(times, refs, "min");
+  const refMax = refsToPoints(times, refs, "max");
 
-  const ctx = document.getElementById(canvasId).getContext("2d");
-  const measured = mkPairs(times, values);
-  const refMin = mkRefPairs(times, refs, "min");
-  const refMax = mkRefPairs(times, refs, "max");
-
-  const bounds = computeBounds([measured, refMin, refMax]);
-
-  state.charts[chartRef] = new Chart(ctx, {
+  const chart = new Chart(ctx, {
     type: "line",
     data: {
       datasets: [
-        {
-          ...datasetBase(),
-          label: `${label} limite max`,
-          data: refMax,
-          borderColor: CHART_COLORS.refLine,
-          borderDash: [8, 6],
-          borderWidth: 1.6,
-          pointRadius: 0,
-          fill: false,
-        },
-        {
-          ...datasetBase(),
-          label: `${label} intervallo di normalità`,
-          data: refMin,
-          borderColor: CHART_COLORS.refLine,
-          borderDash: [8, 6],
-          borderWidth: 1.6,
-          pointRadius: 0,
-          fill: "-1",
-          backgroundColor: CHART_COLORS.glycRange,
-        },
-        {
-          ...datasetBase(),
-          label: `${label} misurata`,
-          data: measured,
-          borderColor: CHART_COLORS.patientBlue,
-          pointBackgroundColor: CHART_COLORS.patientBlue,
-          pointBorderColor: "#ffffff",
-          pointBorderWidth: 1,
-        },
+        { ...lineDataset("Range min", refMin, "rgba(0,0,0,0)") },
+        areaDataset("Range di normalità", refMax, refMin, areaColor),
+        lineDataset(labelSerie, pointsVal, lineColor),
+        { ...lineDataset("Range max", refMax, "rgba(22,163,74,0.55)") },
+        { ...lineDataset("Range min", refMin, "rgba(22,163,74,0.55)") },
       ],
     },
-    options: commonOptions(unit, bounds.min, bounds.max),
+    options: buildChartOptions(unit),
   });
+
+  return chart;
 }
 
 function renderCombined(payload) {
-  destroyChart("combined");
-
-  const ctx = document.getElementById("combinedChart").getContext("2d");
+  const ctx = getCanvasContext("combinedChart");
+  if (!ctx) return null;
 
   const gTimes = payload.glyc_times || [];
   const iTimes = payload.ins_times || [];
 
-  const gMeasured = mkPairs(gTimes, payload.glyc_values || []);
-  const gMin = mkRefPairs(gTimes, payload.glyc_refs || {}, "min");
-  const gMax = mkRefPairs(gTimes, payload.glyc_refs || {}, "max");
+  const gVals = payload.glyc_values || [];
+  const iVals = payload.ins_values || [];
 
-  const iMeasured = mkPairs(iTimes, payload.ins_values || []);
-  const iMin = mkRefPairs(iTimes, payload.ins_refs || {}, "min");
-  const iMax = mkRefPairs(iTimes, payload.ins_refs || {}, "max");
+  const gRefs = payload.glyc_refs || {};
+  const iRefs = payload.ins_refs || {};
 
-  const gb = computeBounds([gMeasured, gMin, gMax]);
-  const ib = computeBounds([iMeasured, iMin, iMax]);
+  const ds = [
+    areaDataset("Glicemia range", refsToPoints(gTimes, gRefs, "max"), refsToPoints(gTimes, gRefs, "min"), "rgba(16,185,129,0.14)"),
+    areaDataset("Insulina range", refsToPoints(iTimes, iRefs, "max"), refsToPoints(iTimes, iRefs, "min"), "rgba(249,115,22,0.14)"),
+    lineDataset(`Glicemia (${payload.glyc_unit || "mg/dL"})`, toPoints(gTimes, gVals), "#2563eb"),
+    lineDataset(`Insulina (${payload.ins_unit || "µUI/mL"})`, toPoints(iTimes, iVals), "#1d4ed8"),
+  ];
 
-  state.charts.combined = new Chart(ctx, {
+  return new Chart(ctx, {
     type: "line",
-    data: {
-      datasets: [
-        {
-          ...datasetBase(),
-          label: "Glicemia limite max",
-          yAxisID: "yG",
-          data: gMax,
-          borderColor: CHART_COLORS.refLine,
-          borderDash: [8, 6],
-          borderWidth: 1.6,
-          pointRadius: 0,
-          fill: false,
-        },
-        {
-          ...datasetBase(),
-          label: "Glicemia intervallo di normalità",
-          yAxisID: "yG",
-          data: gMin,
-          borderColor: CHART_COLORS.refLine,
-          borderDash: [8, 6],
-          borderWidth: 1.6,
-          pointRadius: 0,
-          fill: "-1",
-          backgroundColor: CHART_COLORS.glycRange,
-        },
-        {
-          ...datasetBase(),
-          label: "Glicemia misurata",
-          yAxisID: "yG",
-          data: gMeasured,
-          borderColor: CHART_COLORS.patientBlue,
-          pointBackgroundColor: CHART_COLORS.patientBlue,
-          pointBorderColor: "#ffffff",
-          pointBorderWidth: 1,
-        },
-        {
-          ...datasetBase(),
-          label: "Insulina limite max",
-          yAxisID: "yI",
-          data: iMax,
-          borderColor: CHART_COLORS.refLine,
-          borderDash: [8, 6],
-          borderWidth: 1.6,
-          pointRadius: 0,
-          fill: false,
-        },
-        {
-          ...datasetBase(),
-          label: "Insulina intervallo di normalità",
-          yAxisID: "yI",
-          data: iMin,
-          borderColor: CHART_COLORS.refLine,
-          borderDash: [8, 6],
-          borderWidth: 1.6,
-          pointRadius: 0,
-          fill: "-1",
-          backgroundColor: CHART_COLORS.insRange,
-        },
-        {
-          ...datasetBase(),
-          label: "Insulina misurata",
-          yAxisID: "yI",
-          data: iMeasured,
-          borderColor: CHART_COLORS.patientBlueSoft,
-          borderDash: [5, 4],
-          pointBackgroundColor: CHART_COLORS.patientBlueSoft,
-          pointBorderColor: "#ffffff",
-          pointBorderWidth: 1,
-        },
-      ],
-    },
+    data: { datasets: ds },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: { legend: { position: "bottom" } },
+      animation: false,
+      plugins: {
+        legend: { position: "top" },
+      },
       scales: {
-        x: {
-          type: "linear",
-          title: { display: true, text: "Tempo (min)" },
-          ticks: { callback: (v) => `${v}'` },
-        },
-        yG: {
-          type: "linear",
-          position: "left",
-          min: gb.min,
-          max: gb.max,
-          title: { display: true, text: payload.glyc_unit || "mg/dL" },
-        },
-        yI: {
-          type: "linear",
-          position: "right",
-          min: ib.min,
-          max: ib.max,
-          title: { display: true, text: payload.ins_unit || "µUI/mL" },
-          grid: { drawOnChartArea: false },
-        },
+        x: { type: "linear", title: { display: true, text: "Tempo (min)" } },
+        y: { title: { display: true, text: "Valori" } },
       },
     },
   });
 }
 
 export function renderCharts(payload) {
-  const mode = payload.curve_mode;
+  killChart(state.charts.glyc);
+  killChart(state.charts.ins);
+  killChart(state.charts.combined);
 
-  const hasGlyc = mode === "glyc" || mode === "combined";
-  const hasIns = mode === "ins" || mode === "combined";
-  const hasCombined = mode === "combined";
+  const hasG = Array.isArray(payload?.glyc_times) && payload.glyc_times.length > 0;
+  const hasIns = shouldShowInsulin(payload) && Array.isArray(payload?.ins_times) && payload.ins_times.length > 0;
 
-  hideOrShowChart("glycChart", hasGlyc);
-  hideOrShowChart("insChart", hasIns);
-  hideOrShowChart("combinedChart", hasCombined);
+  setChartCardsVisibility(hasIns);
 
-  if (hasGlyc) {
-    renderSingle(
-      "glycChart",
-      "Glicemia",
-      payload.glyc_unit || "mg/dL",
-      payload.glyc_times || [],
-      payload.glyc_values || [],
-      payload.glyc_refs || {},
-      "glyc"
-    );
-  } else {
-    destroyChart("glyc");
-  }
+  state.charts.glyc = hasG
+    ? renderSingle(
+        "glycChart",
+        payload.glyc_times,
+        payload.glyc_values,
+        payload.glyc_refs,
+        payload.glyc_unit,
+        "Paziente",
+        "rgba(16,185,129,0.18)",
+        "#2563eb"
+      )
+    : null;
 
-  if (hasIns) {
-    renderSingle(
-      "insChart",
-      "Insulina",
-      payload.ins_unit || "µUI/mL",
-      payload.ins_times || [],
-      payload.ins_values || [],
-      payload.ins_refs || {},
-      "ins"
-    );
-  } else {
-    destroyChart("ins");
-  }
+  state.charts.ins = hasIns
+    ? renderSingle(
+        "insChart",
+        payload.ins_times,
+        payload.ins_values,
+        payload.ins_refs,
+        payload.ins_unit,
+        "Paziente",
+        "rgba(249,115,22,0.18)",
+        "#1d4ed8"
+      )
+    : null;
 
-  if (hasCombined) {
-    renderCombined(payload);
-  } else {
-    destroyChart("combined");
-  }
+  state.charts.combined = hasG && hasIns ? renderCombined(payload) : null;
 }

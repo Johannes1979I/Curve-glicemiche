@@ -59,11 +59,6 @@ const PRESETS = [
   { id: "glyc4", name: "Curva glicemica 4 punti", type: "glyc", times: [0, 30, 60, 120] },
   { id: "glyc5", name: "Curva glicemica 5 punti", type: "glyc", times: [0, 30, 60, 90, 120] },
   { id: "glyc6", name: "Curva glicemica 6 punti", type: "glyc", times: [0, 30, 60, 90, 120, 180] },
-  { id: "ins4", name: "Curva insulinemica 4 punti", type: "ins", times: [0, 30, 60, 120] },
-  { id: "ins5", name: "Curva insulinemica 5 punti", type: "ins", times: [0, 30, 60, 90, 120] },
-  { id: "combined4", name: "Combinata 4 punti", type: "combined", glyc_times: [0, 30, 60, 120], ins_times: [0, 30, 60, 120] },
-  { id: "combined5", name: "Combinata 5 punti", type: "combined", glyc_times: [0, 30, 60, 90, 120], ins_times: [0, 30, 60, 90, 120] },
-  { id: "combined6", name: "Combinata 6 punti", type: "combined", glyc_times: [0, 30, 60, 90, 120, 180], ins_times: [0, 30, 60, 90, 120, 180] },
 ];
 
 const DEFAULT_REPORT_SETTINGS = {
@@ -148,7 +143,7 @@ function saveReportSettingsData(payload = {}) {
 function summaryFromStatus(overall) {
   const map = {
     normal: "Referto complessivamente nei limiti di riferimento.",
-    warning: "Referto con alterazioni borderline/moderate da correlare clinicamente.",
+    warning: "Referto con alterazioni da correlare clinicamente.",
     danger: "Referto con alterazioni: necessaria valutazione medica.",
   };
   return map[overall] || map.normal;
@@ -157,41 +152,55 @@ function summaryFromStatus(overall) {
 function evaluateSeries(times, values, refs) {
   const rows = [];
   let severity = "normal";
-  for (let i = 0; i < times.length; i += 1) {
-    const t = times[i];
-    const v = Number(values[i] ?? 0);
-    const ref = refs[String(t)] || refs[t] || { min: 0, max: 0 };
 
-    let status = "normal";
-    if (v < Number(ref.min)) {
-      status = "low";
-      if (severity === "normal") severity = "warning";
-    } else if (v > Number(ref.max)) {
-      status = "high";
-      if (severity === "normal" || severity === "warning") severity = "danger";
+  for (let i = 0; i < times.length; i += 1) {
+    const t = Number(times[i]);
+    const raw = values[i];
+
+    const hasValue = !(raw === null || raw === undefined || String(raw).trim?.() === "");
+    const v = hasValue ? Number(String(raw).replace(",", ".")) : null;
+
+    const ref = refs[String(t)] || refs[t] || { min: 0, max: 0 };
+    const min = Number(ref.min);
+    const max = Number(ref.max);
+
+    let status = "missing";
+    if (hasValue && Number.isFinite(v)) {
+      status = "normal";
+      if (v < min) {
+        status = "low";
+        if (severity === "normal") severity = "warning";
+      } else if (v > max) {
+        status = "high";
+        if (severity === "normal" || severity === "warning") severity = "danger";
+      }
     }
 
     rows.push({
       time: t,
-      value: v,
-      ref: { min: Number(ref.min), max: Number(ref.max) },
+      value: Number.isFinite(v) ? v : null,
+      ref: { min: Number.isFinite(min) ? min : 0, max: Number.isFinite(max) ? max : 0 },
       status,
     });
   }
+
   return { rows, severity };
 }
 
 function interpretExam(payload) {
-  const glyc_times = payload.glyc_times || [];
-  const ins_times = payload.ins_times || [];
-  const glyc_values = payload.glyc_values || [];
-  const ins_values = payload.ins_values || [];
+  const glyc_times = Array.isArray(payload.glyc_times) ? payload.glyc_times : [];
+  const glyc_values = Array.isArray(payload.glyc_values) ? payload.glyc_values : [];
+
+  const includeIns = payload?.include_insulin === true || payload?.curve_mode === "combined";
+  const ins_times = includeIns && Array.isArray(payload.ins_times) ? payload.ins_times : [];
+  const ins_values = includeIns && Array.isArray(payload.ins_values) ? payload.ins_values : [];
+
   const glyc_refs = payload.glyc_refs || {};
-  const ins_refs = payload.ins_refs || {};
+  const ins_refs = includeIns ? (payload.ins_refs || {}) : {};
   const pregnant = !!payload.pregnant_mode;
 
   const glyRes = evaluateSeries(glyc_times, glyc_values, glyc_refs);
-  const insRes = evaluateSeries(ins_times, ins_values, ins_refs);
+  const insRes = includeIns ? evaluateSeries(ins_times, ins_values, ins_refs) : { rows: [], severity: "normal" };
 
   let overall = "normal";
   [glyRes.severity, insRes.severity].forEach((sev) => {
@@ -199,23 +208,36 @@ function interpretExam(payload) {
     else if (sev === "warning" && overall === "normal") overall = "warning";
   });
 
+  // Diagnostica glicemica su valori realmente presenti
   let gly_diag = null;
   if (glyc_times.includes(120)) {
     const i120 = glyc_times.indexOf(120);
-    const v120 = Number(glyc_values[i120] ?? 0);
+    const raw120 = glyc_values[i120];
+    const v120 = raw120 === null || raw120 === undefined || String(raw120).trim() === ""
+      ? null
+      : Number(String(raw120).replace(",", "."));
 
-    if (pregnant) {
-      const v0 = glyc_times.includes(0) ? Number(glyc_values[glyc_times.indexOf(0)] ?? 0) : 0;
-      const v60 = glyc_times.includes(60) ? Number(glyc_values[glyc_times.indexOf(60)] ?? 0) : 0;
-      const gdm = (v0 >= 92) || (v60 >= 180) || (v120 >= 153);
-      if (gdm) {
-        gly_diag = "Criteri IADPSG compatibili con diabete gestazionale (almeno un valore sopra soglia).";
-        if (overall !== "danger") overall = "danger";
-      } else {
-        gly_diag = "Criteri IADPSG nei limiti.";
-      }
-    } else {
-      if (v120 < 140) {
+    if (Number.isFinite(v120)) {
+      if (pregnant) {
+        const pick = (t) => {
+          if (!glyc_times.includes(t)) return null;
+          const raw = glyc_values[glyc_times.indexOf(t)];
+          if (raw === null || raw === undefined || String(raw).trim() === "") return null;
+          const n = Number(String(raw).replace(",", "."));
+          return Number.isFinite(n) ? n : null;
+        };
+
+        const v0 = pick(0);
+        const v60 = pick(60);
+        const gdm = (v0 !== null && v0 >= 92) || (v60 !== null && v60 >= 180) || (v120 >= 153);
+
+        if (gdm) {
+          gly_diag = "Criteri IADPSG compatibili con diabete gestazionale (almeno un valore sopra soglia).";
+          if (overall !== "danger") overall = "danger";
+        } else {
+          gly_diag = "Criteri IADPSG nei limiti.";
+        }
+      } else if (v120 < 140) {
         gly_diag = "Tolleranza glucidica normale.";
       } else if (v120 < 200) {
         gly_diag = "Ridotta tolleranza al glucosio (IGT).";
@@ -228,21 +250,34 @@ function interpretExam(payload) {
   }
 
   let ins_diag = null;
-  if (ins_times.length > 0 && ins_values.length > 0) {
-    const peak_val = Math.max(...ins_values.map((x) => Number(x)));
-    const peak_idx = ins_values.findIndex((x) => Number(x) === peak_val);
-    const peak_time = ins_times[peak_idx];
-    const v0 = Number(ins_values[0] ?? 0);
-    const v120 = ins_times.includes(120) ? Number(ins_values[ins_times.indexOf(120)] ?? 0) : null;
+  const numericIns = (ins_values || [])
+    .map((x) => (x === null || x === undefined || String(x).trim?.() === "" ? null : Number(String(x).replace(",", "."))))
+    .filter((x) => Number.isFinite(x));
 
-    if (peak_time <= 60 && (v120 === null || v120 <= v0 * 3)) {
-      ins_diag = "Pattern insulinemico nel range atteso.";
-    } else if (peak_time > 60) {
-      ins_diag = `Picco insulinemico ritardato (picco a ${peak_time}'). Possibile insulino-resistenza.`;
-      if (overall === "normal") overall = "warning";
-    } else if (v120 !== null && v120 > v0 * 3) {
-      ins_diag = "Ritorno lento verso il basale a 120'.";
-      if (overall === "normal") overall = "warning";
+  if (includeIns && ins_times.length > 0 && numericIns.length > 0) {
+    const normalized = (ins_values || []).map((x) => {
+      if (x === null || x === undefined || String(x).trim?.() === "") return null;
+      const n = Number(String(x).replace(",", "."));
+      return Number.isFinite(n) ? n : null;
+    });
+
+    const peak_val = Math.max(...numericIns);
+    const peak_idx = normalized.findIndex((x) => x === peak_val);
+    const peak_time = peak_idx >= 0 ? ins_times[peak_idx] : null;
+    const v0 = normalized[0];
+    const idx120 = ins_times.indexOf(120);
+    const v120 = idx120 >= 0 ? normalized[idx120] : null;
+
+    if (peak_time !== null) {
+      if (peak_time <= 60 && (v120 === null || v0 === null || v120 <= v0 * 3)) {
+        ins_diag = "Pattern insulinemico nel range atteso.";
+      } else if (peak_time > 60) {
+        ins_diag = `Picco insulinemico ritardato (picco a ${peak_time}'). Possibile insulino-resistenza.`;
+        if (overall === "normal") overall = "warning";
+      } else if (v120 !== null && v0 !== null && v120 > v0 * 3) {
+        ins_diag = "Ritorno lento verso il basale a 120'.";
+        if (overall === "normal") overall = "warning";
+      }
     }
   }
 
@@ -251,9 +286,9 @@ function interpretExam(payload) {
     summary: summaryFromStatus(overall),
     details: {
       glycemic_rows: glyRes.rows,
-      insulin_rows: insRes.rows,
+      insulin_rows: includeIns ? insRes.rows : [],
       glycemic_interpretation: gly_diag,
-      insulin_interpretation: ins_diag,
+      insulin_interpretation: includeIns ? ins_diag : null,
     },
   };
 }
@@ -297,7 +332,8 @@ function toExamOut(e) {
     exam_date: e.exam_date,
     requester_doctor: e.requester_doctor || null,
     acceptance_number: e.acceptance_number || null,
-    curve_mode: e.curve_mode || "glyc",
+    curve_mode: e.curve_mode || (e.include_insulin ? "combined" : "glyc"),
+    include_insulin: e.include_insulin === true || e.curve_mode === "combined",
     pregnant_mode: !!e.pregnant_mode,
     glucose_load_g: Number(e.glucose_load_g ?? 75),
     glyc_unit: e.glyc_unit || "mg/dL",
@@ -395,9 +431,10 @@ export const localApi = {
     if (idx === -1) throw new Error("Paziente non trovato");
 
     const cur = db.patients[idx];
+    const normalizedPayload = { ...(payload || {}) };
     const merged = toPatientOut({
       ...cur,
-      ...payload,
+      ...normalizedPayload,
       id: cur.id,
       birth_date: payload.birth_date !== undefined ? toDateString(payload.birth_date) : cur.birth_date,
       sex: payload.sex ? (payload.sex === "F" ? "F" : "M") : cur.sex,
@@ -424,18 +461,30 @@ export const localApi = {
 
   async saveExam(payload) {
     const db = loadStore();
-    const pid = Number(payload?.patient_id);
+
+    const normalizedPayload = { ...(payload || {}) };
+    const includeIns = normalizedPayload.include_insulin === true || normalizedPayload.curve_mode === "combined";
+    normalizedPayload.include_insulin = includeIns;
+    normalizedPayload.curve_mode = includeIns ? "combined" : "glyc";
+    if (includeIns && Array.isArray(normalizedPayload.glyc_times)) {
+      normalizedPayload.ins_times = [...normalizedPayload.glyc_times];
+    } else if (!includeIns) {
+      normalizedPayload.ins_times = [];
+      normalizedPayload.ins_values = [];
+      normalizedPayload.ins_refs = {};
+    }
+    const pid = Number(normalizedPayload?.patient_id);
     const patient = db.patients.find((p) => Number(p.id) === pid);
     if (!patient) throw new Error("Paziente non trovato");
 
-    const interpretation = interpretExam(payload || {});
+    const interpretation = interpretExam(normalizedPayload || {});
     const id = ++db.counters.exam;
     const now = nowIso();
 
     const row = toExamOut({
       id,
-      ...payload,
-      exam_date: toDateString(payload.exam_date),
+      ...normalizedPayload,
+      exam_date: toDateString(normalizedPayload.exam_date),
       interpretation,
       interpretation_summary: interpretation.summary,
       created_at: now,

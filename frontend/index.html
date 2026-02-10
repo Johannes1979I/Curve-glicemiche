@@ -53,19 +53,14 @@
         <label>Data esame <input id="exam_date" type="date" /></label>
         <label>N° accettazione <input id="acceptance_number" /></label>
         <label>Medico richiedente <input id="requester_doctor" /></label>
-        <label>Modalità
-          <select id="curve_mode">
-            <option value="glyc">Solo glicemica</option>
-            <option value="ins">Solo insulinemica</option>
-            <option value="combined" selected>Combinata</option>
-          </select>
-        </label>
-        <label>Preset
+
+        <label>Preset curva glicemica
           <select id="preset"></select>
         </label>
         <label>Carico glucosio (g)
           <input id="glucose_load_g" type="number" min="25" max="100" value="75" />
         </label>
+
         <label>Unità glicemia
           <select id="glyc_unit">
             <option>mg/dL</option>
@@ -78,12 +73,20 @@
             <option>pmol/L</option>
           </select>
         </label>
+
+        <label class="toggle span-2 switch-row">
+          <input id="include_ins_curve" type="checkbox" />
+          <span class="toggle-slider" aria-hidden="true"></span>
+          <span class="toggle-label">Attiva curva insulinemica (usa gli stessi tempi della curva glicemica)</span>
+        </label>
+
         <div class="span-2 preset-hint muted">Per la gravidanza usa il preset <strong>Curva glicemica 3 punti in gravidanza</strong>.</div>
+
         <label>Tempi glicemica (csv)
           <input id="glyc_times" placeholder="0,30,60,90,120" />
         </label>
-        <label>Tempi insulinemica (csv)
-          <input id="ins_times" placeholder="0,30,60,90,120" />
+        <label id="insTimesWrap">Tempi insulinemica (auto)
+          <input id="ins_times" placeholder="auto" readonly />
         </label>
       </div>
 
@@ -100,7 +103,7 @@
             <input id="methodology_glyc" placeholder="Es. Metodo enzimatico (Esochinasi/G6PDH) - Fotometria UV" />
           </label>
         </div>
-        <div>
+        <div id="insSection">
           <h3>Valori insulina</h3>
           <table id="insTable">
             <thead><tr><th>Tempo</th><th>Valore</th><th>Ref min</th><th>Ref max</th></tr></thead>
@@ -149,12 +152,12 @@
         <div id="logoPreviewBox" class="logo-preview muted">Nessun logo impostato</div>
       </div>
 
-      <label class="toggle">
+      <label class="toggle switch-row">
         <input id="include_interpretation_pdf" type="checkbox" checked />
         <span class="toggle-slider" aria-hidden="true"></span>
         <span class="toggle-label">Includi interpretazione nel referto</span>
       </label>
-      <label class="toggle">
+      <label class="toggle switch-row">
         <input id="merge_charts_pdf" type="checkbox" checked />
         <span class="toggle-slider" aria-hidden="true"></span>
         <span class="toggle-label">Unisci glicemia + insulina in un unico grafico nel referto</span>
@@ -174,11 +177,11 @@
         <h3>Curva glicemica + limiti</h3>
         <canvas id="glycChart"></canvas>
       </div>
-      <div class="chart-card">
+      <div class="chart-card" id="insChartCard">
         <h3>Curva insulinemica + limiti</h3>
         <canvas id="insChart"></canvas>
       </div>
-      <div class="chart-card span-2">
+      <div class="chart-card span-2" id="combinedChartCard">
         <h3>Grafico combinato (glicemia + insulina)</h3>
         <canvas id="combinedChart"></canvas>
       </div>

@@ -1,396 +1,526 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
+import { escapeHtml, formatDate } from "../utils.js";
 import { renderCharts } from "./charts-ui.js";
+import { generatePdf } from "./report-ui.js";
 
-function parseCsvTimes(v) {
-  return String(v || "")
-    .split(",")
-    .map((x) => parseInt(x.trim(), 10))
-    .filter((n) => !Number.isNaN(n));
+function el(id) {
+  return document.getElementById(id);
 }
 
-function buildTableRows(tableId, times, refsMap) {
+function parseCsvInts(text) {
+  return String(text || "")
+    .split(",")
+    .map((x) => Number(String(x).trim()))
+    .filter((n) => Number.isFinite(n))
+    .map((n) => Math.round(n));
+}
+
+function toCsv(arr) {
+  return (arr || []).join(",");
+}
+
+function getSelectedPreset() {
+  const id = el("preset").value;
+  return state.presets.find((p) => p.id === id) || null;
+}
+
+function isPregnancyPreset(preset) {
+  return !!(preset && preset.pregnant === true);
+}
+
+function isInsulinEnabled() {
+  return !!el("include_ins_curve")?.checked;
+}
+
+function normalizeMaybeNumber(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim().replace(",", ".");
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function setTimesFromPreset() {
+  const preset = getSelectedPreset();
+  if (!preset) return;
+
+  const glycTimes = Array.isArray(preset.times)
+    ? preset.times
+    : Array.isArray(preset.glyc_times)
+      ? preset.glyc_times
+      : [];
+
+  el("glyc_times").value = toCsv(glycTimes);
+
+  if (isInsulinEnabled()) {
+    el("ins_times").value = toCsv(glycTimes);
+  } else {
+    el("ins_times").value = "";
+  }
+
+  applyRefsFromInputs();
+  rebuildValueTables();
+}
+
+function syncInsTimesWithGlyc() {
+  if (!isInsulinEnabled()) {
+    el("ins_times").value = "";
+    return;
+  }
+  const glycTimes = parseCsvInts(el("glyc_times").value);
+  el("ins_times").value = toCsv(glycTimes);
+}
+
+function getGlycRefsForTimes(times) {
+  const preset = getSelectedPreset();
+  const usePregnancyRefs = isPregnancyPreset(preset);
+  const source = usePregnancyRefs ? state.refs.pregnant_glyc_refs : state.refs.default_glyc_refs;
+
+  const out = {};
+  (times || []).forEach((t) => {
+    const r = source[String(t)] || source[t] || { min: 0, max: 0 };
+    out[String(t)] = { min: Number(r.min), max: Number(r.max) };
+  });
+  return out;
+}
+
+function getInsRefsForTimes(times) {
+  const source = state.refs.default_ins_refs || {};
+  const out = {};
+  (times || []).forEach((t) => {
+    const r = source[String(t)] || source[t] || { min: 0, max: 0 };
+    out[String(t)] = { min: Number(r.min), max: Number(r.max) };
+  });
+  return out;
+}
+
+function buildValueTable(tableId, times, refs, existingMap = {}) {
   const tbody = document.querySelector(`#${tableId} tbody`);
+  if (!tbody) return;
+
   tbody.innerHTML = "";
-  times.forEach((t) => {
-    const ref = refsMap[String(t)] || refsMap[t] || { min: "", max: "" };
+  (times || []).forEach((t) => {
+    const ref = refs[String(t)] || refs[t] || { min: 0, max: 0 };
+    const existing = existingMap[String(t)] ?? existingMap[t];
+    const valueText = existing === null || existing === undefined || Number.isNaN(Number(existing)) ? "" : String(existing);
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${t === 0 ? "Basale (T0)" : `T${t}' (${t} min)`}</td>
-      <td><input data-role="value" type="number" step="0.1" /></td>
-      <td><input data-role="min" type="number" step="0.1" value="${ref.min}" /></td>
-      <td><input data-role="max" type="number" step="0.1" value="${ref.max}" /></td>
+      <td>${t}</td>
+      <td><input data-time="${t}" class="val-input" placeholder="0" value="${escapeHtml(valueText)}" /></td>
+      <td><input data-time="${t}" class="ref-min" value="${Number(ref.min)}" /></td>
+      <td><input data-time="${t}" class="ref-max" value="${Number(ref.max)}" /></td>
     `;
     tbody.appendChild(tr);
   });
 }
 
 function tableToSeries(tableId) {
-  const rows = Array.from(document.querySelectorAll(`#${tableId} tbody tr`));
-  const values = rows.map((r) => Number(r.querySelector('input[data-role="value"]').value || 0));
+  const rows = document.querySelectorAll(`#${tableId} tbody tr`);
+  const times = [];
+  const values = [];
   const refs = {};
+
   rows.forEach((r) => {
-    const tText = r.children[0].textContent || "";
-    const m = tText.match(/(\d+)/);
-    const t = tText.includes("Basale") ? 0 : (m ? parseInt(m[1], 10) : 0);
+    const t = Number(r.querySelector(".val-input")?.dataset.time || 0);
+    const rawVal = r.querySelector(".val-input")?.value;
+    const v = normalizeMaybeNumber(rawVal);
+
+    const min = Number(String(r.querySelector(".ref-min")?.value || "0").replace(",", "."));
+    const max = Number(String(r.querySelector(".ref-max")?.value || "0").replace(",", "."));
+
+    times.push(t);
+    values.push(v);
     refs[String(t)] = {
-      min: Number(r.querySelector('input[data-role="min"]').value || 0),
-      max: Number(r.querySelector('input[data-role="max"]').value || 0),
+      min: Number.isFinite(min) ? min : 0,
+      max: Number.isFinite(max) ? max : 0,
     };
   });
-  return { values, refs };
+
+  return { times, values, refs };
 }
 
-function getSelectedPreset() {
-  const presetId = document.getElementById("preset")?.value;
-  return state.presets.find((x) => x.id === presetId) || null;
+function applyRefsFromInputs() {
+  const glycTimes = parseCsvInts(el("glyc_times").value);
+  const glycRefs = getGlycRefsForTimes(glycTimes);
+
+  const insEnabled = isInsulinEnabled();
+  syncInsTimesWithGlyc();
+  const insTimes = insEnabled ? parseCsvInts(el("ins_times").value) : [];
+  const insRefs = insEnabled ? getInsRefsForTimes(insTimes) : {};
+
+  state.refs._current_glyc = glycRefs;
+  state.refs._current_ins = insRefs;
+
+  return { glycTimes, glycRefs, insTimes, insRefs };
 }
 
-function isPregnantPresetSelected() {
-  const preset = getSelectedPreset();
-  return !!(preset && preset.pregnant === true);
+function rebuildValueTables(existing = {}) {
+  const { glycTimes, glycRefs, insTimes, insRefs } = applyRefsFromInputs();
+
+  buildValueTable("glycTable", glycTimes, glycRefs, existing.glyc || {});
+  buildValueTable("insTable", insTimes, insRefs, existing.ins || {});
+
+  toggleInsulinSections(isInsulinEnabled());
 }
 
 function setPresetOptions() {
-  const sel = document.getElementById("preset");
-  sel.innerHTML = state.presets.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
+  const sel = el("preset");
+  if (!sel) return;
+
+  const glyPresets = (state.presets || []).filter((p) => p.type === "glyc");
+  sel.innerHTML = glyPresets
+    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`)
+    .join("");
+
+  const defaultPreset = glyPresets.find((p) => p.id === "glyc3") || glyPresets[0] || null;
+  if (defaultPreset) sel.value = defaultPreset.id;
 }
 
-function renderRefsSourceInfo() {
-  const box = document.getElementById("refsSourceInfo");
-  if (!box) return;
-  const meta = state.refs?.metadata;
-  if (!meta) {
-    box.innerHTML = "";
-    return;
-  }
+function toggleInsulinSections(show) {
+  const insTimesWrap = el("insTimesWrap");
+  const insSection = el("insSection");
+  const insChartCard = el("insChartCard");
+  const combinedChartCard = el("combinedChartCard");
 
-  const sources = Array.isArray(meta.sources)
-    ? `<ul>${meta.sources.map((s) => `<li>${s}</li>`).join("")}</ul>`
-    : "";
-
-  box.innerHTML = `
-    <div class="ref-box">
-      <strong>Profilo riferimenti:</strong> ${meta.profile_name || "n/d"}
-      ${meta.dataset_name ? `<br/><small>Dataset: ${meta.dataset_name}</small>` : ""}
-      ${meta.dataset_version ? `<br/><small>Versione: ${meta.dataset_version}</small>` : ""}
-      <br/><small>Aggiornato: ${meta.updated_at || "n/d"}</small>
-      ${meta.notes ? `<p>${meta.notes}</p>` : ""}
-      ${sources}
-    </div>
-  `;
-}
-
-function applyPresetToTimes() {
-  const preset = getSelectedPreset();
-  if (!preset) return;
-
-  let mode = document.getElementById("curve_mode").value;
-
-  // La curva gravidanza è solo glicemica: forziamo la modalità coerente.
-  if (preset.pregnant === true && mode !== "glyc") {
-    mode = "glyc";
-    document.getElementById("curve_mode").value = "glyc";
-  }
-
-  let glyc = [];
-  let ins = [];
-
-  if (preset.type === "combined") {
-    glyc = preset.glyc_times || [];
-    ins = preset.ins_times || [];
-  } else if (preset.type === "glyc") {
-    glyc = preset.times || [];
-    ins = mode === "combined" ? [...glyc] : [];
-  } else if (preset.type === "ins") {
-    ins = preset.times || [];
-    glyc = mode === "combined" ? [...ins] : [];
-  }
-
-  document.getElementById("glyc_times").value = glyc.join(",");
-  document.getElementById("ins_times").value = ins.join(",");
-  rebuildTables();
-}
-
-function getCurrentRefs() {
-  const pregnant = isPregnantPresetSelected();
-  return {
-    glyc: pregnant
-      ? (state.refs?.pregnant_glyc_refs || {})
-      : (state.refs?.default_glyc_refs || {}),
-    ins: state.refs?.default_ins_refs || {},
-  };
-}
-
-function rebuildTables() {
-  const glycTimes = parseCsvTimes(document.getElementById("glyc_times").value);
-  const insTimes = parseCsvTimes(document.getElementById("ins_times").value);
-  const refs = getCurrentRefs();
-
-  buildTableRows("glycTable", glycTimes, refs.glyc);
-  buildTableRows("insTable", insTimes, refs.ins);
-}
-
-function joinMethodologies() {
-  const mg = document.getElementById("methodology_glyc")?.value?.trim() || "";
-  const mi = document.getElementById("methodology_ins")?.value?.trim() || "";
-
-  const lines = [];
-  if (mg) lines.push(`Glicemia: ${mg}`);
-  if (mi) lines.push(`Insulina: ${mi}`);
-  return lines.join("\n");
-}
-
-function splitMethodologies(rawText = "") {
-  const out = { glyc: "", ins: "" };
-  const text = String(rawText || "").trim();
-  if (!text) return out;
-
-  const lines = text.split(/\r?\n/).map((x) => x.trim());
-  for (const line of lines) {
-    if (line.toLowerCase().startsWith("glicemia:")) {
-      out.glyc = line.replace(/^glicemia\s*:\s*/i, "").trim();
-    } else if (line.toLowerCase().startsWith("insulina:")) {
-      out.ins = line.replace(/^insulina\s*:\s*/i, "").trim();
-    }
-  }
-
-  if (!out.glyc && text) out.glyc = text;
-  return out;
+  [insTimesWrap, insSection, insChartCard, combinedChartCard].forEach((node) => {
+    if (!node) return;
+    node.classList.toggle("is-hidden", !show);
+  });
 }
 
 function buildPayload() {
-  if (!state.selectedPatient) throw new Error("Seleziona un paziente prima di continuare.");
+  const patient = state.selectedPatient;
+  if (!patient) throw new Error("Seleziona un paziente.");
 
-  const exam_date = document.getElementById("exam_date").value;
-  if (!exam_date) throw new Error("Inserisci la data esame.");
+  const includeIns = isInsulinEnabled();
+  syncInsTimesWithGlyc();
 
-  const glyc_times = parseCsvTimes(document.getElementById("glyc_times").value);
-  const ins_times = parseCsvTimes(document.getElementById("ins_times").value);
+  const gly = tableToSeries("glycTable");
+  const ins = includeIns ? tableToSeries("insTable") : { times: [], values: [], refs: {} };
 
-  const glyc = tableToSeries("glycTable");
-  const ins = tableToSeries("insTable");
+  const preset = getSelectedPreset();
+  const pregnant = isPregnancyPreset(preset);
 
-  return {
-    patient_id: state.selectedPatient.id,
-    exam_date,
-    requester_doctor: document.getElementById("requester_doctor").value || null,
-    acceptance_number: document.getElementById("acceptance_number").value || null,
-    curve_mode: document.getElementById("curve_mode").value,
-    pregnant_mode: isPregnantPresetSelected(),
-    glucose_load_g: Number(document.getElementById("glucose_load_g").value || 75),
-    glyc_unit: document.getElementById("glyc_unit").value,
-    ins_unit: document.getElementById("ins_unit").value,
-    glyc_times,
-    ins_times,
-    glyc_values: glyc.values,
-    ins_values: ins.values,
-    glyc_refs: glyc.refs,
-    ins_refs: ins.refs,
-    methodology: joinMethodologies() || null,
-    notes: document.getElementById("exam_notes").value || null,
+  const payload = {
+    patient_id: Number(patient.id),
+    exam_date: el("exam_date").value || new Date().toISOString().slice(0, 10),
+    requester_doctor: el("requester_doctor").value || null,
+    acceptance_number: el("acceptance_number").value || null,
+
+    curve_mode: includeIns ? "combined" : "glyc",
+    include_insulin: includeIns,
+    pregnant_mode: pregnant,
+    glucose_load_g: Number(el("glucose_load_g").value || 75),
+
+    glyc_unit: el("glyc_unit").value || "mg/dL",
+    ins_unit: el("ins_unit").value || "µUI/mL",
+
+    glyc_times: gly.times,
+    glyc_values: gly.values,
+    glyc_refs: gly.refs,
+
+    ins_times: includeIns ? ins.times : [],
+    ins_values: includeIns ? ins.values : [],
+    ins_refs: includeIns ? ins.refs : {},
+
+    methodology: JSON.stringify({
+      glyc: el("methodology_glyc").value || null,
+      ins: includeIns ? (el("methodology_ins").value || null) : null,
+    }),
+
+    notes: el("exam_notes").value || null,
   };
+
+  // Sempre stessa struttura temporale se insulina attiva
+  if (includeIns) {
+    payload.ins_times = [...payload.glyc_times];
+  }
+
+  return payload;
+}
+
+function severityClass(overall) {
+  if (overall === "danger") return "danger";
+  if (overall === "warning") return "warning";
+  return "ok";
 }
 
 function renderSummary(interp) {
-  state.interpretation = interp;
-  const box = document.getElementById("summary");
-  const b = `<span class="badge ${interp.overall_status}">${interp.overall_status.toUpperCase()}</span>`;
-  const gly = interp.details.glycemic_interpretation ? `<li>${interp.details.glycemic_interpretation}</li>` : "";
-  const ins = interp.details.insulin_interpretation ? `<li>${interp.details.insulin_interpretation}</li>` : "";
+  const box = el("summary");
+  if (!box) return;
+
+  if (!interp) {
+    box.className = "summary";
+    box.innerHTML = "Nessuna interpretazione disponibile.";
+    return;
+  }
+
+  const details = interp.details || {};
+  const payload = state.lastPayload || {};
+  const includeIns = payload.include_insulin === true || payload.curve_mode === "combined";
+
+  const glyInt = details.glycemic_interpretation ? `<li><strong>Glicemia:</strong> ${escapeHtml(details.glycemic_interpretation)}</li>` : "";
+  const insInt = includeIns && details.insulin_interpretation
+    ? `<li><strong>Insulina:</strong> ${escapeHtml(details.insulin_interpretation)}</li>`
+    : "";
+
+  box.className = `summary ${severityClass(interp.overall_status)}`;
   box.innerHTML = `
-    <p>${b} <strong>${interp.summary}</strong></p>
-    <ul>${gly}${ins}</ul>
+    <strong>Esito sintetico:</strong> ${escapeHtml(interp.summary || "-")}
+    <ul>
+      ${glyInt}
+      ${insInt}
+    </ul>
   `;
 }
 
-function setDefaultMethodologies(defaultMethods = {}) {
-  const gly = document.getElementById("methodology_glyc");
-  const ins = document.getElementById("methodology_ins");
-  if (gly && !gly.value.trim()) gly.value = defaultMethods.glyc || "";
-  if (ins && !ins.value.trim()) ins.value = defaultMethods.ins || "";
+async function previewInterpretation() {
+  const payload = buildPayload();
+  state.lastPayload = payload;
+  const interp = await api.previewExam(payload);
+  state.interpretation = interp;
+  renderSummary(interp);
+  renderCharts(payload);
 }
 
-function sameTimes(a = [], b = []) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    if (Number(a[i]) !== Number(b[i])) return false;
-  }
-  return true;
+async function saveExam() {
+  const payload = buildPayload();
+  state.lastPayload = payload;
+  const saved = await api.saveExam(payload);
+  state.selectedExamId = saved.id;
+  state.interpretation = saved.interpretation;
+
+  renderSummary(saved.interpretation);
+  renderCharts(payload);
+  await refreshExamHistory();
+  alert(`Esame salvato (ID ${saved.id})`);
 }
 
 function chooseBestPresetForExam(exam) {
-  const mode = exam.curve_mode;
-  const pregnant = !!exam.pregnant_mode;
+  const exTimes = JSON.stringify((exam?.glyc_times || []).map(Number));
+  const exPreg = !!exam?.pregnant_mode;
 
-  const candidates = state.presets.filter((p) => {
-    if (mode === "combined") return p.type === "combined";
-    if (mode === "glyc") return p.type === "glyc";
-    if (mode === "ins") return p.type === "ins";
-    return false;
+  const glyPresets = (state.presets || []).filter((p) => p.type === "glyc");
+  const exact = glyPresets.find((p) => JSON.stringify((p.times || []).map(Number)) === exTimes && !!p.pregnant === exPreg);
+  if (exact) return exact;
+
+  const sameTimes = glyPresets.find((p) => JSON.stringify((p.times || []).map(Number)) === exTimes);
+  return sameTimes || null;
+}
+
+function mapValuesByTime(times, values) {
+  const out = {};
+  (times || []).forEach((t, i) => {
+    out[String(t)] = values?.[i] ?? null;
   });
+  return out;
+}
 
-  // Prima match perfetto su gravidanza + tempi
-  for (const p of candidates) {
-    const isPreg = !!p.pregnant;
-    if (isPreg !== pregnant) continue;
+async function loadExam(examId) {
+  const exam = await api.getExam(examId);
+  state.selectedExamId = exam.id;
 
-    if (p.type === "combined") {
-      if (sameTimes(p.glyc_times || [], exam.glyc_times || []) && sameTimes(p.ins_times || [], exam.ins_times || [])) {
-        return p;
-      }
-    } else if (p.type === "glyc") {
-      if (sameTimes(p.times || [], exam.glyc_times || [])) return p;
-    } else if (p.type === "ins") {
-      if (sameTimes(p.times || [], exam.ins_times || [])) return p;
-    }
+  el("exam_date").value = String(exam.exam_date || "").slice(0, 10);
+  el("requester_doctor").value = exam.requester_doctor || "";
+  el("acceptance_number").value = exam.acceptance_number || "";
+  el("glucose_load_g").value = Number(exam.glucose_load_g ?? 75);
+  el("glyc_unit").value = exam.glyc_unit || "mg/dL";
+  el("ins_unit").value = exam.ins_unit || "µUI/mL";
+  el("exam_notes").value = exam.notes || "";
+
+  const hasIns = exam.include_insulin === true || exam.curve_mode === "combined" || ((exam.ins_times || []).length > 0);
+  el("include_ins_curve").checked = hasIns;
+
+  const p = chooseBestPresetForExam(exam);
+  if (p) {
+    el("preset").value = p.id;
   }
 
-  // fallback: primo candidato con stesso flag gravidanza (se presente)
-  const byPreg = candidates.find((p) => !!p.pregnant === pregnant);
-  if (byPreg) return byPreg;
+  el("glyc_times").value = toCsv(exam.glyc_times || []);
+  if (hasIns) {
+    el("ins_times").value = toCsv(exam.ins_times?.length ? exam.ins_times : exam.glyc_times || []);
+  } else {
+    el("ins_times").value = "";
+  }
 
-  return candidates[0] || null;
+  const method = (() => {
+    try {
+      return exam.methodology ? JSON.parse(exam.methodology) : {};
+    } catch {
+      return {};
+    }
+  })();
+
+  el("methodology_glyc").value = method.glyc || "";
+  el("methodology_ins").value = method.ins || "";
+
+  const glycValues = mapValuesByTime(exam.glyc_times || [], exam.glyc_values || []);
+  const insValues = mapValuesByTime(exam.ins_times || [], exam.ins_values || []);
+
+  rebuildValueTables({
+    glyc: glycValues,
+    ins: insValues,
+  });
+
+  state.lastPayload = {
+    ...exam,
+    include_insulin: hasIns,
+  };
+  state.interpretation = exam.interpretation || null;
+
+  renderSummary(state.interpretation);
+  renderCharts(state.lastPayload);
 }
 
 export async function refreshExamHistory() {
-  if (!state.selectedPatient) return;
+  const box = el("examHistory");
+  if (!box) return;
+
+  if (!state.selectedPatient) {
+    box.innerHTML = '<div class="list-item"><small>Seleziona un paziente.</small></div>';
+    return;
+  }
+
   const rows = await api.listExams(state.selectedPatient.id);
-  const box = document.getElementById("examHistory");
-  box.innerHTML = rows.map((r) => `
-    <div class="card-item">
-      <div>
-        <strong>#${r.id}</strong> — ${r.exam_date} (${r.curve_mode})
-        <br/><small>${r.interpretation_summary || "n/d"}</small>
-      </div>
-      <div class="row">
-        <button data-load="${r.id}">Apri</button>
-        <button data-del="${r.id}">Elimina</button>
-      </div>
-    </div>
-  `).join("") || "<small>Nessun esame registrato per questo paziente</small>";
+  if (!rows.length) {
+    box.innerHTML = '<div class="list-item"><small>Nessun esame presente.</small></div>';
+    return;
+  }
 
-  box.querySelectorAll("button[data-load]").forEach((btn) => {
+  box.innerHTML = rows
+    .map((r) => {
+      const modeLabel = r.curve_mode === "combined"
+        ? "Glicemica + Insulinemica"
+        : "Glicemica";
+
+      return `
+      <div class="list-item">
+        <div>
+          <strong>#${r.id}</strong> — ${escapeHtml(formatDate(r.exam_date))}
+          <div class="muted">${escapeHtml(modeLabel)} • ${escapeHtml(r.interpretation_summary || "-")}</div>
+        </div>
+        <div class="row">
+          <button data-load-exam="${r.id}">Apri</button>
+          <button class="danger" data-del-exam="${r.id}">Elimina</button>
+        </div>
+      </div>
+    `;
+    })
+    .join("");
+
+  box.querySelectorAll("[data-load-exam]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const id = Number(btn.dataset.load);
-      const exam = await api.getExam(id);
-      document.getElementById("exam_date").value = exam.exam_date;
-      document.getElementById("acceptance_number").value = exam.acceptance_number || "";
-      document.getElementById("requester_doctor").value = exam.requester_doctor || "";
-      document.getElementById("curve_mode").value = exam.curve_mode;
-      document.getElementById("glucose_load_g").value = exam.glucose_load_g;
-      document.getElementById("glyc_unit").value = exam.glyc_unit;
-      document.getElementById("ins_unit").value = exam.ins_unit;
-      document.getElementById("glyc_times").value = exam.glyc_times.join(",");
-      document.getElementById("ins_times").value = exam.ins_times.join(",");
-
-      const matchedPreset = chooseBestPresetForExam(exam);
-      if (matchedPreset) {
-        document.getElementById("preset").value = matchedPreset.id;
+      try {
+        await loadExam(Number(btn.dataset.loadExam));
+      } catch (e) {
+        alert(e.message || "Errore caricamento esame");
       }
-
-      rebuildTables();
-
-      // fill values/refs from loaded exam
-      const glyRows = document.querySelectorAll("#glycTable tbody tr");
-      glyRows.forEach((r, i) => {
-        const t = exam.glyc_times[i];
-        const ref = exam.glyc_refs[String(t)] || { min: "", max: "" };
-        r.querySelector('input[data-role="value"]').value = exam.glyc_values[i] ?? "";
-        r.querySelector('input[data-role="min"]').value = ref.min;
-        r.querySelector('input[data-role="max"]').value = ref.max;
-      });
-
-      const insRows = document.querySelectorAll("#insTable tbody tr");
-      insRows.forEach((r, i) => {
-        const t = exam.ins_times[i];
-        const ref = exam.ins_refs[String(t)] || { min: "", max: "" };
-        r.querySelector('input[data-role="value"]').value = exam.ins_values[i] ?? "";
-        r.querySelector('input[data-role="min"]').value = ref.min;
-        r.querySelector('input[data-role="max"]').value = ref.max;
-      });
-
-      const methods = splitMethodologies(exam.methodology || "");
-      document.getElementById("methodology_glyc").value = methods.glyc || "";
-      document.getElementById("methodology_ins").value = methods.ins || "";
-      document.getElementById("exam_notes").value = exam.notes || "";
-
-      renderSummary(exam.interpretation);
-      state.lastPayload = exam;
-      renderCharts(exam);
     });
   });
 
-  box.querySelectorAll("button[data-del]").forEach((btn) => {
+  box.querySelectorAll("[data-del-exam]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Eliminare l'esame?")) return;
-      await api.deleteExam(Number(btn.dataset.del));
-      await refreshExamHistory();
+      if (!confirm("Eliminare questo esame?")) return;
+      try {
+        await api.deleteExam(Number(btn.dataset.delExam));
+        if (state.selectedExamId === Number(btn.dataset.delExam)) {
+          state.selectedExamId = null;
+        }
+        await refreshExamHistory();
+      } catch (e) {
+        alert(e.message || "Errore eliminazione esame");
+      }
     });
-  });
-}
-
-export function bindExamUI() {
-  document.getElementById("exam_date").value = new Date().toISOString().slice(0, 10);
-
-  document.getElementById("preset").addEventListener("change", applyPresetToTimes);
-
-  document.getElementById("curve_mode").addEventListener("change", () => {
-    const preset = getSelectedPreset();
-    if (preset?.pregnant && document.getElementById("curve_mode").value !== "glyc") {
-      document.getElementById("curve_mode").value = "glyc";
-    }
-    rebuildTables();
-  });
-
-  document.getElementById("btnPreview").addEventListener("click", async () => {
-    try {
-      const payload = buildPayload();
-      const interp = await api.previewExam(payload);
-      renderSummary(interp);
-      state.lastPayload = payload;
-      renderCharts(payload);
-    } catch (e) {
-      alert(e.message);
-    }
-  });
-
-  document.getElementById("btnSaveExam").addEventListener("click", async () => {
-    try {
-      const payload = buildPayload();
-      const saved = await api.saveExam(payload);
-      renderSummary(saved.interpretation);
-      state.lastPayload = saved;
-      renderCharts(saved);
-      await refreshExamHistory();
-      alert(`Esame salvato con ID ${saved.id}`);
-    } catch (e) {
-      alert(e.message);
-    }
   });
 }
 
 export function initPresetsAndRefs(presetsPayload) {
-  state.presets = presetsPayload.presets || [];
-
-  // Safety net: evita errori se refs non è inizializzato
-  if (!state.refs || typeof state.refs !== "object") {
-    state.refs = {};
-  }
-
-  state.refs.default_glyc_refs = presetsPayload.default_glyc_refs || {};
-  state.refs.pregnant_glyc_refs = presetsPayload.pregnant_glyc_refs || {};
-  state.refs.default_ins_refs = presetsPayload.default_ins_refs || {};
-  state.refs.metadata = presetsPayload.references_metadata || null;
+  state.presets = presetsPayload?.presets || [];
+  state.refs.default_glyc_refs = presetsPayload?.default_glyc_refs || {};
+  state.refs.pregnant_glyc_refs = presetsPayload?.pregnant_glyc_refs || {};
+  state.refs.default_ins_refs = presetsPayload?.default_ins_refs || {};
+  state.refs.metadata = presetsPayload?.references_metadata || null;
 
   setPresetOptions();
-  renderRefsSourceInfo();
 
-  setDefaultMethodologies(presetsPayload.default_methodologies || {});
+  const methods = presetsPayload?.default_methodologies || {};
+  const mg = el("methodology_glyc");
+  const mi = el("methodology_ins");
+  if (mg && methods.glyc) mg.value = methods.glyc;
+  if (mi && methods.ins) mi.value = methods.ins;
 
-  // default
-  if (state.presets[0]) {
-    document.getElementById("preset").value = state.presets[0].id;
+  const refBox = el("refsSourceInfo");
+  if (refBox && state.refs.metadata) {
+    const m = state.refs.metadata;
+    const srcList = Array.isArray(m.sources) ? m.sources.slice(0, 6) : [];
+    refBox.innerHTML = `
+      <div class="ref-box">
+        <strong>Profilo riferimenti:</strong> ${escapeHtml(m.profile_name || "-")}<br/>
+        <small>Dataset: ${escapeHtml(m.dataset_name || "-")} • Versione: ${escapeHtml(m.dataset_version || "-")} • Agg.: ${escapeHtml(m.updated_at || "-")}</small>
+        ${m.notes ? `<p class="muted">${escapeHtml(m.notes)}</p>` : ""}
+        ${srcList.length ? `<small>Fonti principali:</small><ul>${srcList.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>` : ""}
+      </div>
+    `;
   }
-  applyPresetToTimes();
+
+  el("exam_date").value = new Date().toISOString().slice(0, 10);
+  el("include_ins_curve").checked = false;
+
+  setTimesFromPreset();
+}
+
+export function bindExamUI() {
+  el("preset")?.addEventListener("change", () => {
+    setTimesFromPreset();
+  });
+
+  el("include_ins_curve")?.addEventListener("change", () => {
+    syncInsTimesWithGlyc();
+    rebuildValueTables();
+    if (state.lastPayload) {
+      state.lastPayload.include_insulin = isInsulinEnabled();
+      state.lastPayload.curve_mode = isInsulinEnabled() ? "combined" : "glyc";
+      renderCharts(state.lastPayload);
+    }
+  });
+
+  el("glyc_times")?.addEventListener("change", () => {
+    syncInsTimesWithGlyc();
+    rebuildValueTables();
+  });
+
+  el("btnPreview")?.addEventListener("click", async () => {
+    try {
+      await previewInterpretation();
+    } catch (e) {
+      alert(e.message || "Errore calcolo interpretazione");
+    }
+  });
+
+  el("btnSaveExam")?.addEventListener("click", async () => {
+    try {
+      await saveExam();
+    } catch (e) {
+      alert(e.message || "Errore salvataggio esame");
+    }
+  });
+
+  el("btnPdf")?.addEventListener("click", async () => {
+    try {
+      // Usa SEMPRE i dati correnti del form (evita referti con dati “stale”)
+      const payload = buildPayload();
+      const interp = await api.previewExam(payload);
+
+      state.lastPayload = payload;
+      state.interpretation = interp;
+
+      renderSummary(interp, payload);
+      renderCharts(payload);
+      await generatePdf(payload, interp);
+    } catch (e) {
+      alert(e?.message || "Errore generazione PDF.");
+    }
+  });
 }

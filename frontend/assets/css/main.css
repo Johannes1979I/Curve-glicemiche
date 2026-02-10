@@ -419,3 +419,24 @@ tr:last-child td {
     margin-right: 16px;
   }
 }
+
+.switch-row {
+  align-self: end;
+  margin-top: 2px;
+}
+
+.switch-row .toggle-label {
+  display: inline-block;
+  padding-top: 1px;
+}
+
+#insTimesWrap,
+#insSection,
+#insChartCard,
+#combinedChartCard {
+  transition: opacity 0.2s ease;
+}
+
+.is-hidden {
+  display: none !important;
+}
