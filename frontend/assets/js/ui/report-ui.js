@@ -213,9 +213,29 @@ function canvasToImage(canvas, options = {}) {
   tctx.fillRect(0, 0, tmp.width, tmp.height);
 
   if (square) {
-    // Richiesta utente: grafici con sviluppo quadrato e area piena.
-    // Stretch controllato per riempire tutta l'area del quadrato.
-    tctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
+    // Mantiene le proporzioni (no stretching): il grafico resta leggibile
+    // e viene centrato in un riquadro quadrato.
+    const srcRatio = srcW / srcH;
+    const dstRatio = tmp.width / tmp.height;
+
+    let drawW;
+    let drawH;
+    let dx;
+    let dy;
+
+    if (srcRatio > dstRatio) {
+      drawW = tmp.width;
+      drawH = drawW / srcRatio;
+      dx = 0;
+      dy = (tmp.height - drawH) / 2;
+    } else {
+      drawH = tmp.height;
+      drawW = drawH * srcRatio;
+      dx = (tmp.width - drawW) / 2;
+      dy = 0;
+    }
+
+    tctx.drawImage(canvas, dx, dy, drawW, drawH);
   } else {
     tctx.drawImage(canvas, 0, 0);
   }
@@ -477,12 +497,19 @@ function renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, marg
   const titleGap = 2.6;
   const labelH = 3.2;
 
+  const requiredMinH = charts.length === 2 ? 72 : 68;
+  const currentAvailable = safeBottom - (y + titleGap + labelH + 3);
+  if (currentAvailable < requiredMinH) {
+    doc.addPage();
+    y = drawHeader(doc, settings, pageWidth, margin) + 2;
+    y = drawSectionTitle(doc, "Grafici", y, margin, pageWidth, settings, pageHeight);
+  }
+
   if (charts.length === 2) {
     const maxSideByWidth = (pageWidth - margin * 2 - gap) / 2;
     const availableH = Math.max(18, safeBottom - (y + titleGap + labelH + 3));
     let side = Math.min(maxSideByWidth, availableH);
 
-    // Priorità: far rientrare i grafici nella stessa pagina dei dati
     side = Math.max(18, side);
 
     const totalW = side * 2 + gap;
@@ -497,7 +524,7 @@ function renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, marg
     addImageFilled(doc, charts[0].image, startX, boxY, side, side);
     addImageFilled(doc, charts[1].image, startX + side + gap, boxY, side, side);
 
-    return boxY + side + 3;
+    return boxY + side + 4.5;
   }
 
   // Caso singolo grafico
@@ -515,7 +542,7 @@ function renderChartsBlock(doc, y, charts, settings, pageWidth, pageHeight, marg
   const boxY = y + titleGap + labelH;
   addImageFilled(doc, charts[0].image, x, boxY, side, side);
 
-  return boxY + side + 3;
+  return boxY + side + 4.5;
 }
 
 function addFooterOnAllPages(doc, margin) {
@@ -635,16 +662,18 @@ function generatePdf() {
   doc.text(`Modalità gravidanza: ${payload.pregnant_mode ? "SÌ" : "NO"}`, margin + 125, y);
   y += 8;
 
-  y = drawStatusBadge(
-    doc,
-    y,
-    state.interpretation?.overall_status || "normal",
-    state.interpretation?.summary || "",
-    margin,
-    settings,
-    pageWidth,
-    pageHeight
-  );
+  if (settings.include_interpretation_pdf) {
+    y = drawStatusBadge(
+      doc,
+      y,
+      state.interpretation?.overall_status || "normal",
+      state.interpretation?.summary || "",
+      margin,
+      settings,
+      pageWidth,
+      pageHeight
+    );
+  }
 
   y = drawSectionTitle(doc, "Risultati analitici", y, margin, pageWidth, settings, pageHeight);
 

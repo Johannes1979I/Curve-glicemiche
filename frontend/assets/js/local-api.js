@@ -52,10 +52,14 @@ const REFERENCES_METADATA = {
 };
 
 const PRESETS = [
-  { id: "glyc3", name: "Curva Glicemica 3 punti", type: "glyc", times: [0, 60, 120] },
-  { id: "glyc5", name: "Curva Glicemica 5 punti", type: "glyc", times: [0, 30, 60, 90, 120] },
-  { id: "glyc6", name: "Curva Glicemica 6 punti", type: "glyc", times: [0, 30, 60, 90, 120, 180] },
-  { id: "ins5", name: "Curva Insulinemica 5 punti", type: "ins", times: [0, 30, 60, 90, 120] },
+  { id: "glyc3", name: "Curva glicemica 3 punti", type: "glyc", times: [0, 60, 120] },
+  { id: "glyc3_preg", name: "Curva glicemica 3 punti in gravidanza", type: "glyc", times: [0, 60, 120], pregnant: true },
+  { id: "glyc4", name: "Curva glicemica 4 punti", type: "glyc", times: [0, 30, 60, 120] },
+  { id: "glyc5", name: "Curva glicemica 5 punti", type: "glyc", times: [0, 30, 60, 90, 120] },
+  { id: "glyc6", name: "Curva glicemica 6 punti", type: "glyc", times: [0, 30, 60, 90, 120, 180] },
+  { id: "ins4", name: "Curva insulinemica 4 punti", type: "ins", times: [0, 30, 60, 120] },
+  { id: "ins5", name: "Curva insulinemica 5 punti", type: "ins", times: [0, 30, 60, 90, 120] },
+  { id: "combined4", name: "Combinata 4 punti", type: "combined", glyc_times: [0, 30, 60, 120], ins_times: [0, 30, 60, 120] },
   { id: "combined5", name: "Combinata 5 punti", type: "combined", glyc_times: [0, 30, 60, 90, 120], ins_times: [0, 30, 60, 90, 120] },
   { id: "combined6", name: "Combinata 6 punti", type: "combined", glyc_times: [0, 30, 60, 90, 120, 180], ins_times: [0, 30, 60, 90, 120, 180] },
 ];

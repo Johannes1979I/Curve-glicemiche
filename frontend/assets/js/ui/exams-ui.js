@@ -41,6 +41,16 @@ function tableToSeries(tableId) {
   return { values, refs };
 }
 
+function getSelectedPreset() {
+  const presetId = document.getElementById("preset")?.value;
+  return state.presets.find((x) => x.id === presetId) || null;
+}
+
+function isPregnantPresetSelected() {
+  const preset = getSelectedPreset();
+  return !!(preset && preset.pregnant === true);
+}
+
 function setPresetOptions() {
   const sel = document.getElementById("preset");
   sel.innerHTML = state.presets.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
@@ -72,11 +82,17 @@ function renderRefsSourceInfo() {
 }
 
 function applyPresetToTimes() {
-  const presetId = document.getElementById("preset").value;
-  const preset = state.presets.find((x) => x.id === presetId);
+  const preset = getSelectedPreset();
   if (!preset) return;
 
-  const mode = document.getElementById("curve_mode").value;
+  let mode = document.getElementById("curve_mode").value;
+
+  // La curva gravidanza è solo glicemica: forziamo la modalità coerente.
+  if (preset.pregnant === true && mode !== "glyc") {
+    mode = "glyc";
+    document.getElementById("curve_mode").value = "glyc";
+  }
+
   let glyc = [];
   let ins = [];
 
@@ -97,7 +113,7 @@ function applyPresetToTimes() {
 }
 
 function getCurrentRefs() {
-  const pregnant = document.getElementById("pregnant_mode").checked;
+  const pregnant = isPregnantPresetSelected();
   return {
     glyc: pregnant
       ? (state.refs?.pregnant_glyc_refs || {})
@@ -161,7 +177,7 @@ function buildPayload() {
     requester_doctor: document.getElementById("requester_doctor").value || null,
     acceptance_number: document.getElementById("acceptance_number").value || null,
     curve_mode: document.getElementById("curve_mode").value,
-    pregnant_mode: document.getElementById("pregnant_mode").checked,
+    pregnant_mode: isPregnantPresetSelected(),
     glucose_load_g: Number(document.getElementById("glucose_load_g").value || 75),
     glyc_unit: document.getElementById("glyc_unit").value,
     ins_unit: document.getElementById("ins_unit").value,
@@ -195,6 +211,48 @@ function setDefaultMethodologies(defaultMethods = {}) {
   if (ins && !ins.value.trim()) ins.value = defaultMethods.ins || "";
 }
 
+function sameTimes(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (Number(a[i]) !== Number(b[i])) return false;
+  }
+  return true;
+}
+
+function chooseBestPresetForExam(exam) {
+  const mode = exam.curve_mode;
+  const pregnant = !!exam.pregnant_mode;
+
+  const candidates = state.presets.filter((p) => {
+    if (mode === "combined") return p.type === "combined";
+    if (mode === "glyc") return p.type === "glyc";
+    if (mode === "ins") return p.type === "ins";
+    return false;
+  });
+
+  // Prima match perfetto su gravidanza + tempi
+  for (const p of candidates) {
+    const isPreg = !!p.pregnant;
+    if (isPreg !== pregnant) continue;
+
+    if (p.type === "combined") {
+      if (sameTimes(p.glyc_times || [], exam.glyc_times || []) && sameTimes(p.ins_times || [], exam.ins_times || [])) {
+        return p;
+      }
+    } else if (p.type === "glyc") {
+      if (sameTimes(p.times || [], exam.glyc_times || [])) return p;
+    } else if (p.type === "ins") {
+      if (sameTimes(p.times || [], exam.ins_times || [])) return p;
+    }
+  }
+
+  // fallback: primo candidato con stesso flag gravidanza (se presente)
+  const byPreg = candidates.find((p) => !!p.pregnant === pregnant);
+  if (byPreg) return byPreg;
+
+  return candidates[0] || null;
+}
+
 export async function refreshExamHistory() {
   if (!state.selectedPatient) return;
   const rows = await api.listExams(state.selectedPatient.id);
@@ -220,12 +278,17 @@ export async function refreshExamHistory() {
       document.getElementById("acceptance_number").value = exam.acceptance_number || "";
       document.getElementById("requester_doctor").value = exam.requester_doctor || "";
       document.getElementById("curve_mode").value = exam.curve_mode;
-      document.getElementById("pregnant_mode").checked = !!exam.pregnant_mode;
       document.getElementById("glucose_load_g").value = exam.glucose_load_g;
       document.getElementById("glyc_unit").value = exam.glyc_unit;
       document.getElementById("ins_unit").value = exam.ins_unit;
       document.getElementById("glyc_times").value = exam.glyc_times.join(",");
       document.getElementById("ins_times").value = exam.ins_times.join(",");
+
+      const matchedPreset = chooseBestPresetForExam(exam);
+      if (matchedPreset) {
+        document.getElementById("preset").value = matchedPreset.id;
+      }
+
       rebuildTables();
 
       // fill values/refs from loaded exam
@@ -237,6 +300,7 @@ export async function refreshExamHistory() {
         r.querySelector('input[data-role="min"]').value = ref.min;
         r.querySelector('input[data-role="max"]').value = ref.max;
       });
+
       const insRows = document.querySelectorAll("#insTable tbody tr");
       insRows.forEach((r, i) => {
         const t = exam.ins_times[i];
@@ -270,8 +334,14 @@ export function bindExamUI() {
   document.getElementById("exam_date").value = new Date().toISOString().slice(0, 10);
 
   document.getElementById("preset").addEventListener("change", applyPresetToTimes);
-  document.getElementById("curve_mode").addEventListener("change", rebuildTables);
-  document.getElementById("pregnant_mode").addEventListener("change", rebuildTables);
+
+  document.getElementById("curve_mode").addEventListener("change", () => {
+    const preset = getSelectedPreset();
+    if (preset?.pregnant && document.getElementById("curve_mode").value !== "glyc") {
+      document.getElementById("curve_mode").value = "glyc";
+    }
+    rebuildTables();
+  });
 
   document.getElementById("btnPreview").addEventListener("click", async () => {
     try {
@@ -303,7 +373,7 @@ export function bindExamUI() {
 export function initPresetsAndRefs(presetsPayload) {
   state.presets = presetsPayload.presets || [];
 
-  // Safety net: avoid "Cannot set properties of null" if refs is not initialized
+  // Safety net: evita errori se refs non è inizializzato
   if (!state.refs || typeof state.refs !== "object") {
     state.refs = {};
   }
@@ -318,7 +388,7 @@ export function initPresetsAndRefs(presetsPayload) {
 
   setDefaultMethodologies(presetsPayload.default_methodologies || {});
 
-  // defaults
+  // default
   if (state.presets[0]) {
     document.getElementById("preset").value = state.presets[0].id;
   }

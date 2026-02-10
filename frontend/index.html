@@ -78,10 +78,7 @@
             <option>pmol/L</option>
           </select>
         </label>
-        <label class="span-2 checkbox">
-          <input id="pregnant_mode" type="checkbox" />
-          Modalità gravidanza (range IADPSG per glicemia)
-        </label>
+        <div class="span-2 preset-hint muted">Per la gravidanza usa il preset <strong>Curva glicemica 3 punti in gravidanza</strong>.</div>
         <label>Tempi glicemica (csv)
           <input id="glyc_times" placeholder="0,30,60,90,120" />
         </label>
@@ -152,13 +149,15 @@
         <div id="logoPreviewBox" class="logo-preview muted">Nessun logo impostato</div>
       </div>
 
-      <label class="checkbox">
+      <label class="toggle">
         <input id="include_interpretation_pdf" type="checkbox" checked />
-        Includi interpretazione nel referto
+        <span class="toggle-slider" aria-hidden="true"></span>
+        <span class="toggle-label">Includi interpretazione nel referto</span>
       </label>
-      <label class="checkbox">
+      <label class="toggle">
         <input id="merge_charts_pdf" type="checkbox" checked />
-        Unisci glicemia + insulina in un unico grafico nel referto
+        <span class="toggle-slider" aria-hidden="true"></span>
+        <span class="toggle-label">Unisci glicemia + insulina in un unico grafico nel referto</span>
       </label>
 
       <div class="row span-2">
