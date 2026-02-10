@@ -20,9 +20,75 @@ function toCsv(arr) {
   return (arr || []).join(",");
 }
 
+const FALLBACK_GLYC_PRESETS = [
+  { id: "glyc3", name: "Curva glicemica 3 punti", type: "glyc", times: [0, 60, 120] },
+  { id: "glyc4", name: "Curva glicemica 4 punti", type: "glyc", times: [0, 30, 60, 120] },
+  { id: "glyc5", name: "Curva glicemica 5 punti", type: "glyc", times: [0, 30, 60, 90, 120] },
+  { id: "glyc6", name: "Curva glicemica 6 punti", type: "glyc", times: [0, 30, 60, 90, 120, 180] },
+  {
+    id: "glyc3_preg",
+    name: "Curva glicemica 3 punti in gravidanza",
+    type: "glyc",
+    times: [0, 60, 120],
+    pregnant: true,
+  },
+];
+
+function getGlycemicPresets() {
+  const src = Array.isArray(state.presets) ? state.presets : [];
+  const out = [];
+  const byId = new Set();
+
+  const norm = (p = {}) => {
+    const id = String(p.id || "").trim();
+    const name = String(p.name || "").trim();
+    const times = Array.isArray(p.times)
+      ? p.times
+      : Array.isArray(p.glyc_times)
+        ? p.glyc_times
+        : [];
+    const pregnant = p.pregnant === true || id === "glyc3_preg" || id === "glyc_preg";
+    const type = String(p.type || "glyc").toLowerCase();
+
+    return {
+      ...p,
+      id: id || "",
+      name: name || "Preset",
+      type,
+      times: times.map((n) => Number(n)).filter((n) => Number.isFinite(n)),
+      pregnant,
+    };
+  };
+
+  const pushPreset = (preset) => {
+    const p = norm(preset);
+    if (!p.id || !Array.isArray(p.times) || p.times.length === 0) return;
+    if (p.type !== "glyc") return;
+    if (byId.has(p.id)) return;
+    byId.add(p.id);
+    out.push(p);
+  };
+
+  src.forEach(pushPreset);
+  FALLBACK_GLYC_PRESETS.forEach(pushPreset);
+
+  const order = ["glyc3", "glyc4", "glyc5", "glyc6", "glyc3_preg", "glyc_preg"];
+  out.sort((a, b) => {
+    const ia = order.indexOf(a.id);
+    const ib = order.indexOf(b.id);
+    if (ia === -1 && ib === -1) return a.name.localeCompare(b.name, "it");
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  return out;
+}
+
+
 function getSelectedPreset() {
-  const id = el("preset").value;
-  return state.presets.find((p) => p.id === id) || null;
+  const id = el("preset")?.value;
+  return getGlycemicPresets().find((p) => p.id === id) || null;
 }
 
 function isPregnancyPreset(preset) {
@@ -169,12 +235,17 @@ function setPresetOptions() {
   const sel = el("preset");
   if (!sel) return;
 
-  const glyPresets = (state.presets || []).filter((p) => p.type === "glyc");
+  const glyPresets = getGlycemicPresets();
   sel.innerHTML = glyPresets
     .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`)
     .join("");
 
-  const defaultPreset = glyPresets.find((p) => p.id === "glyc3") || glyPresets[0] || null;
+  const defaultPreset =
+    glyPresets.find((p) => p.id === "glyc3") ||
+    glyPresets.find((p) => p.id === "glyc4") ||
+    glyPresets[0] ||
+    null;
+
   if (defaultPreset) sel.value = defaultPreset.id;
 }
 
@@ -259,7 +330,9 @@ function renderSummary(interp) {
 
   const details = interp.details || {};
   const payload = state.lastPayload || {};
-  const includeIns = payload.include_insulin === true || payload.curve_mode === "combined";
+  const includeIns = Object.prototype.hasOwnProperty.call(payload || {}, "include_insulin")
+    ? payload.include_insulin === true
+    : payload?.curve_mode === "combined";
 
   const glyInt = details.glycemic_interpretation ? `<li><strong>Glicemia:</strong> ${escapeHtml(details.glycemic_interpretation)}</li>` : "";
   const insInt = includeIns && details.insulin_interpretation
@@ -302,7 +375,7 @@ function chooseBestPresetForExam(exam) {
   const exTimes = JSON.stringify((exam?.glyc_times || []).map(Number));
   const exPreg = !!exam?.pregnant_mode;
 
-  const glyPresets = (state.presets || []).filter((p) => p.type === "glyc");
+  const glyPresets = getGlycemicPresets();
   const exact = glyPresets.find((p) => JSON.stringify((p.times || []).map(Number)) === exTimes && !!p.pregnant === exPreg);
   if (exact) return exact;
 
@@ -437,11 +510,12 @@ export async function refreshExamHistory() {
 }
 
 export function initPresetsAndRefs(presetsPayload) {
-  state.presets = presetsPayload?.presets || [];
-  state.refs.default_glyc_refs = presetsPayload?.default_glyc_refs || {};
-  state.refs.pregnant_glyc_refs = presetsPayload?.pregnant_glyc_refs || {};
-  state.refs.default_ins_refs = presetsPayload?.default_ins_refs || {};
-  state.refs.metadata = presetsPayload?.references_metadata || null;
+  state.presets = Array.isArray(presetsPayload?.presets) ? presetsPayload.presets : [];
+  if (!state.refs || typeof state.refs !== "object") state.refs = {};
+  state.refs.default_glyc_refs = presetsPayload?.default_glyc_refs || state.refs.default_glyc_refs || {};
+  state.refs.pregnant_glyc_refs = presetsPayload?.pregnant_glyc_refs || state.refs.pregnant_glyc_refs || {};
+  state.refs.default_ins_refs = presetsPayload?.default_ins_refs || state.refs.default_ins_refs || {};
+  state.refs.metadata = presetsPayload?.references_metadata || state.refs.metadata || null;
 
   setPresetOptions();
 

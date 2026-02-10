@@ -56,6 +56,7 @@ const REFERENCES_METADATA = {
 const PRESETS = [
   { id: "glyc3", name: "Curva glicemica 3 punti", type: "glyc", times: [0, 60, 120] },
   { id: "glyc3_preg", name: "Curva glicemica 3 punti in gravidanza", type: "glyc", times: [0, 60, 120], pregnant: true },
+  { id: "glyc_preg", name: "Curva glicemica gravidanza (3 punti)", type: "glyc", times: [0, 60, 120], pregnant: true },
   { id: "glyc4", name: "Curva glicemica 4 punti", type: "glyc", times: [0, 30, 60, 120] },
   { id: "glyc5", name: "Curva glicemica 5 punti", type: "glyc", times: [0, 30, 60, 90, 120] },
   { id: "glyc6", name: "Curva glicemica 6 punti", type: "glyc", times: [0, 30, 60, 90, 120, 180] },
@@ -191,7 +192,9 @@ function interpretExam(payload) {
   const glyc_times = Array.isArray(payload.glyc_times) ? payload.glyc_times : [];
   const glyc_values = Array.isArray(payload.glyc_values) ? payload.glyc_values : [];
 
-  const includeIns = payload?.include_insulin === true || payload?.curve_mode === "combined";
+  const includeIns = Object.prototype.hasOwnProperty.call(payload || {}, "include_insulin")
+    ? payload.include_insulin === true
+    : payload?.curve_mode === "combined";
   const ins_times = includeIns && Array.isArray(payload.ins_times) ? payload.ins_times : [];
   const ins_values = includeIns && Array.isArray(payload.ins_values) ? payload.ins_values : [];
 
@@ -332,8 +335,8 @@ function toExamOut(e) {
     exam_date: e.exam_date,
     requester_doctor: e.requester_doctor || null,
     acceptance_number: e.acceptance_number || null,
-    curve_mode: e.curve_mode || (e.include_insulin ? "combined" : "glyc"),
-    include_insulin: e.include_insulin === true || e.curve_mode === "combined",
+    curve_mode: (Object.prototype.hasOwnProperty.call(e || {}, "include_insulin") ? (e.include_insulin === true ? "combined" : "glyc") : (e.curve_mode || "glyc")),
+    include_insulin: Object.prototype.hasOwnProperty.call(e || {}, "include_insulin") ? e.include_insulin === true : e.curve_mode === "combined",
     pregnant_mode: !!e.pregnant_mode,
     glucose_load_g: Number(e.glucose_load_g ?? 75),
     glyc_unit: e.glyc_unit || "mg/dL",
@@ -463,7 +466,9 @@ export const localApi = {
     const db = loadStore();
 
     const normalizedPayload = { ...(payload || {}) };
-    const includeIns = normalizedPayload.include_insulin === true || normalizedPayload.curve_mode === "combined";
+    const includeIns = Object.prototype.hasOwnProperty.call(normalizedPayload || {}, "include_insulin")
+      ? normalizedPayload.include_insulin === true
+      : normalizedPayload.curve_mode === "combined";
     normalizedPayload.include_insulin = includeIns;
     normalizedPayload.curve_mode = includeIns ? "combined" : "glyc";
     if (includeIns && Array.isArray(normalizedPayload.glyc_times)) {
