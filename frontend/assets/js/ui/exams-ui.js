@@ -30,7 +30,22 @@ function isPregnancyPreset(preset) {
 }
 
 function isInsulinEnabled() {
-  return !!el("include_ins_curve")?.checked;
+  const sw = el("include_ins_curve");
+  if (sw) return !!sw.checked;
+
+  // Compatibilità con layout legacy (select "curve_mode")
+  const mode = el("curve_mode")?.value;
+  return mode === "combined" || mode === "ins";
+}
+
+function setInsulinEnabled(enabled) {
+  const on = !!enabled;
+  const sw = el("include_ins_curve");
+  if (sw) sw.checked = on;
+
+  // Mantieni allineata anche la select legacy, se presente
+  const mode = el("curve_mode");
+  if (mode) mode.value = on ? "combined" : "glyc";
 }
 
 function normalizeMaybeNumber(v) {
@@ -51,12 +66,12 @@ function setTimesFromPreset() {
       ? preset.glyc_times
       : [];
 
-  el("glyc_times").value = toCsv(glycTimes);
+  if (el("glyc_times")) el("glyc_times").value = toCsv(glycTimes);
 
   if (isInsulinEnabled()) {
-    el("ins_times").value = toCsv(glycTimes);
+    if (el("ins_times")) el("ins_times").value = toCsv(glycTimes);
   } else {
-    el("ins_times").value = "";
+    if (el("ins_times")) el("ins_times").value = "";
   }
 
   applyRefsFromInputs();
@@ -65,11 +80,11 @@ function setTimesFromPreset() {
 
 function syncInsTimesWithGlyc() {
   if (!isInsulinEnabled()) {
-    el("ins_times").value = "";
+    if (el("ins_times")) el("ins_times").value = "";
     return;
   }
-  const glycTimes = parseCsvInts(el("glyc_times").value);
-  el("ins_times").value = toCsv(glycTimes);
+  const glycTimes = parseCsvInts(el("glyc_times")?.value);
+  if (el("ins_times")) el("ins_times").value = toCsv(glycTimes);
 }
 
 function getGlycRefsForTimes(times) {
@@ -142,12 +157,12 @@ function tableToSeries(tableId) {
 }
 
 function applyRefsFromInputs() {
-  const glycTimes = parseCsvInts(el("glyc_times").value);
+  const glycTimes = parseCsvInts(el("glyc_times")?.value);
   const glycRefs = getGlycRefsForTimes(glycTimes);
 
   const insEnabled = isInsulinEnabled();
   syncInsTimesWithGlyc();
-  const insTimes = insEnabled ? parseCsvInts(el("ins_times").value) : [];
+  const insTimes = insEnabled ? parseCsvInts(el("ins_times")?.value) : [];
   const insRefs = insEnabled ? getInsRefsForTimes(insTimes) : {};
 
   state.refs._current_glyc = glycRefs;
@@ -179,10 +194,10 @@ function setPresetOptions() {
 }
 
 function toggleInsulinSections(show) {
-  const insTimesWrap = el("insTimesWrap");
-  const insSection = el("insSection");
-  const insChartCard = el("insChartCard");
-  const combinedChartCard = el("combinedChartCard");
+  const insTimesWrap = el("insTimesWrap") || el("ins_times")?.closest("label") || el("ins_times")?.parentElement;
+  const insSection = el("insSection") || el("insTable")?.closest("div");
+  const insChartCard = el("insChartCard") || el("insChart")?.closest(".chart-card");
+  const combinedChartCard = el("combinedChartCard") || el("combinedChart")?.closest(".chart-card");
 
   [insTimesWrap, insSection, insChartCard, combinedChartCard].forEach((node) => {
     if (!node) return;
@@ -331,7 +346,7 @@ async function loadExam(examId) {
   el("exam_notes").value = exam.notes || "";
 
   const hasIns = exam.include_insulin === true || exam.curve_mode === "combined" || ((exam.ins_times || []).length > 0);
-  el("include_ins_curve").checked = hasIns;
+  setInsulinEnabled(hasIns);
 
   const p = chooseBestPresetForExam(exam);
   if (p) {
@@ -342,7 +357,7 @@ async function loadExam(examId) {
   if (hasIns) {
     el("ins_times").value = toCsv(exam.ins_times?.length ? exam.ins_times : exam.glyc_times || []);
   } else {
-    el("ins_times").value = "";
+    if (el("ins_times")) el("ins_times").value = "";
   }
 
   const method = (() => {
@@ -466,7 +481,7 @@ export function initPresetsAndRefs(presetsPayload) {
   }
 
   el("exam_date").value = new Date().toISOString().slice(0, 10);
-  el("include_ins_curve").checked = false;
+  setInsulinEnabled(false);
 
   setTimesFromPreset();
 }
@@ -477,11 +492,26 @@ export function bindExamUI() {
   });
 
   el("include_ins_curve")?.addEventListener("change", () => {
+    const on = isInsulinEnabled();
+    setInsulinEnabled(on);
     syncInsTimesWithGlyc();
     rebuildValueTables();
     if (state.lastPayload) {
-      state.lastPayload.include_insulin = isInsulinEnabled();
-      state.lastPayload.curve_mode = isInsulinEnabled() ? "combined" : "glyc";
+      state.lastPayload.include_insulin = on;
+      state.lastPayload.curve_mode = on ? "combined" : "glyc";
+      renderCharts(state.lastPayload);
+    }
+  });
+
+  // Compatibilità con UI legacy basata su select modalità
+  el("curve_mode")?.addEventListener("change", () => {
+    const on = isInsulinEnabled();
+    setInsulinEnabled(on);
+    syncInsTimesWithGlyc();
+    rebuildValueTables();
+    if (state.lastPayload) {
+      state.lastPayload.include_insulin = on;
+      state.lastPayload.curve_mode = on ? "combined" : "glyc";
       renderCharts(state.lastPayload);
     }
   });

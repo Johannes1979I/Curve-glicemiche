@@ -85,23 +85,23 @@ function setLogoPreview(dataUrl) {
 }
 
 function applySettingsToForm(settings) {
-  $("report_title").value = settings.report_title || DEFAULT_REPORT_SETTINGS.report_title;
-  $("header_line1").value = settings.header_line1 || "";
-  $("header_line2").value = settings.header_line2 || "";
-  $("header_line3").value = settings.header_line3 || "";
-  $("include_interpretation_pdf").checked = !!settings.include_interpretation_pdf;
-  $("merge_charts_pdf").checked = !!settings.merge_charts_pdf;
+  if ($("report_title")) $("report_title").value = settings.report_title || DEFAULT_REPORT_SETTINGS.report_title;
+  if ($("header_line1")) $("header_line1").value = settings.header_line1 || "";
+  if ($("header_line2")) $("header_line2").value = settings.header_line2 || "";
+  if ($("header_line3")) $("header_line3").value = settings.header_line3 || "";
+  if ($("include_interpretation_pdf")) $("include_interpretation_pdf").checked = !!settings.include_interpretation_pdf;
+  if ($("merge_charts_pdf")) $("merge_charts_pdf").checked = !!settings.merge_charts_pdf;
   setLogoPreview(settings.header_logo_data_url);
 }
 
 function getFormSettings() {
   return normalizeSettings({
-    report_title: $("report_title").value.trim() || DEFAULT_REPORT_SETTINGS.report_title,
-    header_line1: $("header_line1").value.trim(),
-    header_line2: $("header_line2").value.trim(),
-    header_line3: $("header_line3").value.trim(),
-    include_interpretation_pdf: $("include_interpretation_pdf").checked,
-    merge_charts_pdf: $("merge_charts_pdf").checked,
+    report_title: $("report_title")?.value?.trim() || DEFAULT_REPORT_SETTINGS.report_title,
+    header_line1: $("header_line1")?.value?.trim() || "",
+    header_line2: $("header_line2")?.value?.trim() || "",
+    header_line3: $("header_line3")?.value?.trim() || "",
+    include_interpretation_pdf: !!$("include_interpretation_pdf")?.checked,
+    merge_charts_pdf: !!$("merge_charts_pdf")?.checked,
     header_logo_data_url: state.reportSettings?.header_logo_data_url || null,
   });
 }
